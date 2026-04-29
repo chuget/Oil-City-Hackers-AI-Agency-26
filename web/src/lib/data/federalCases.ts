@@ -16,14 +16,14 @@ export async function getFederalCases(limit = 20): Promise<ContractCandidate[]> 
       ROUND((
         CAST(NULLIF(amendment_value, '') AS DECIMAL(15,2)) /
         NULLIF(CAST(NULLIF(original_value, '') AS DECIMAL(15,2)), 0)
-      )::numeric, 3)::float AS amendment_ratio,
+      - 1)::numeric, 3)::float AS amendment_ratio,
       solicitation_procedure
     FROM public.contracts
-    WHERE original_value ~ '^[0-9]'
-      AND amendment_value ~ '^[0-9]'
+    WHERE TRIM(original_value) ~ '^[0-9]+(\\.[0-9]+)?$'
+      AND TRIM(amendment_value) ~ '^[0-9]+(\\.[0-9]+)?$'
       AND CAST(NULLIF(original_value, '') AS DECIMAL(15,2)) > 10000
       AND CAST(NULLIF(amendment_value, '') AS DECIMAL(15,2))
-        > CAST(NULLIF(original_value, '') AS DECIMAL(15,2))
+        > 0
     ORDER BY amendment_ratio DESC NULLS LAST
     LIMIT $1
     `,

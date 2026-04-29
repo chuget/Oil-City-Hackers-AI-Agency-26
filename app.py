@@ -80,13 +80,13 @@ def _safe_ratio(amendment_value: float, original_value: float) -> float | None:
 def _is_non_competitive(contract: pd.Series) -> bool:
     raw = str(contract.get("solicitation_procedure_raw") or "").strip().upper()
     label = str(contract.get("solicitation_procedure") or "").strip().lower()
-    return raw in {"TN", "AC"} or "non-competitive" in label
+    return raw in {"TN", "AC"} or label in {"non-competitive", "non-concurrentielle"}
 
 
 def _is_competitive(contract: pd.Series) -> bool:
     raw = str(contract.get("solicitation_procedure_raw") or "").strip().upper()
     label = str(contract.get("solicitation_procedure") or "").strip().lower()
-    return raw in {"OB", "TC", "ST"} or "competitive" in label
+    return raw in {"OB", "TC", "ST"} or label in {"competitive", "concurrentielle", "open bidding", "traditional competitive", "standing offer or supply arrangement"}
 
 
 @st.cache_data(show_spinner=False)
@@ -517,6 +517,10 @@ def main() -> None:
             "solicitation_procedure",
         ]
     ].copy()
+
+    if ranked_display.empty:
+        st.warning("No contracts match the current filter set. Adjust filters to continue.")
+        return
 
     st.dataframe(
         ranked_display,

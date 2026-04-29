@@ -24,6 +24,50 @@ class GateResult:
     rationale: str
 
 
+def _badge(text: str, bg: str, fg: str = "#0b1220") -> str:
+    safe = str(text).replace("<", "&lt;").replace(">", "&gt;")
+    return (
+        f"<span style='display:inline-block;"
+        f"padding:0.14rem 0.6rem;border-radius:999px;"
+        f"background:{bg};color:{fg};font-weight:800;"
+        f"font-size:0.80rem;letter-spacing:0.03em;"
+        f"border:1px solid rgba(255,255,255,0.18);"
+        f"box-shadow:0 0 0 1px rgba(0,0,0,0.35), 0 6px 18px rgba(0,0,0,0.25)'>"
+        f"{safe}"
+        f"</span>"
+    )
+
+
+def verdict_badge(verdict: GateVerdict) -> str:
+    v = str(verdict).upper()
+    if v == "PASS":
+        return _badge(v, bg="#22C55E", fg="#062B12")  # green (strong)
+    if v == "PARTIAL":
+        return _badge(v, bg="#F59E0B", fg="#2A1700")  # amber (strong)
+    if v == "FAIL":
+        return _badge(v, bg="#EF4444", fg="#2A0606")  # red (strong)
+    if v == "HOLD":
+        return _badge(v, bg="#F97316", fg="#2A1203")  # orange (strong)
+    if v == "PROVISIONAL":
+        return _badge(v, bg="#38BDF8", fg="#03202D")  # sky (strong)
+    if v == "CONFIRMED":
+        return _badge(v, bg="#3B82F6", fg="#04142E")  # blue (strong)
+    return _badge(v, bg="#E5E7EB", fg="#111827")  # gray fallback
+
+
+def claim_badge(claim: ClaimValidity) -> str:
+    c = str(claim).upper()
+    if c == "CLEARED":
+        return _badge(c, bg="#22C55E", fg="#062B12")
+    if c == "FLAGGED":
+        return _badge(c, bg="#F59E0B", fg="#2A1700")
+    if c == "INVESTIGATED":
+        return _badge(c, bg="#F97316", fg="#2A1203")
+    if c == "CRITICAL":
+        return _badge(c, bg="#EF4444", fg="#2A0606")
+    return _badge(c, bg="#E5E7EB", fg="#111827")
+
+
 def _safe_ratio(amendment_value: float, original_value: float) -> float | None:
     if original_value is None or original_value == 0:
         return None
@@ -392,11 +436,17 @@ def main() -> None:
     with card_left:
         st.markdown("**Gate verdicts (AG-01 → AG-06)**")
         for g in gates:
-            st.write(f"**{g.gate}:** `{g.verdict}` — {g.rationale}")
+            st.markdown(
+                f"**{g.gate}:** {verdict_badge(g.verdict)} — {g.rationale}",
+                unsafe_allow_html=True,
+            )
 
     with card_right:
         st.markdown("**Governed output**")
-        st.metric("Claim validity", claim)
+        st.markdown(
+            f"**Claim validity:** {claim_badge(claim)}",
+            unsafe_allow_html=True,
+        )
         st.markdown("**Evidence requirements for escalation**")
         for item in evidence_requirements_for(claim):
             st.write(f"- {item}")

@@ -2,15 +2,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+import os
 from pathlib import Path
 from typing import Literal
 
 import altair as alt
 import pandas as pd
+import psycopg
 import streamlit as st
 
 
 DATA_PATH = Path(__file__).parent / "data" / "contracts.csv"
+SQL_PATH = Path(__file__).parent / "dev1-sql" / "DEV1_CANONICAL_SQL_CONTRACT.sql"
 
 
 GateVerdict = Literal["PASS", "PARTIAL", "FAIL", "HOLD", "PROVISIONAL", "CONFIRMED"]
@@ -73,11 +76,44 @@ def _safe_ratio(amendment_value: float, original_value: float) -> float | None:
         return None
     if amendment_value is None:
         return None
-    return float(amendment_value) / float(original_value)
+    return (float(amendment_value) / float(original_value)) - 1.0
+
+
+def _is_non_competitive(contract: pd.Series) -> bool:
+    raw = str(contract.get("solicitation_procedure_raw") or "").strip().upper()
+    label = str(contract.get("solicitation_procedure") or "").strip().lower()
+    return raw in {"TN", "AC"} or "non-competitive" in label
 
 
 @st.cache_data(show_spinner=False)
 def load_contracts() -> pd.DataFrame:
+    conn_str = os.environ.get("DB_CONNECTION_STRING", "").strip()
+    if conn_str:
+        sql = SQL_PATH.read_text(encoding="utf-8").split(";")[0].strip()
+        with psycopg.connect(conn_str, sslmode="require") as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                rows = cur.fetchall()
+                cols = [desc[0] for desc in cur.description]
+        df = pd.DataFrame(rows, columns=cols)
+        df["contract_or_agreement_date"] = pd.to_datetime(
+            df["contract_or_agreement_date"], errors="coerce"
+        ).dt.date
+        df = df.rename(
+            columns={
+                "contract_or_agreement_date": "contract_date",
+                "vendor": "vendor_name",
+            }
+        )
+        if "reference_number" not in df.columns:
+            # Canonical SQL output does not currently include reference_number.
+            # Use record_id as a stable surrogate for UI grouping/selection.
+            df["reference_number"] = df["record_id"]
+        if "description" not in df.columns:
+            df["description"] = "Not provided in canonical output."
+        return df
+
+    st.warning("DB_CONNECTION_STRING not set; using local CSV fallback data.")
     df = pd.read_csv(DATA_PATH)
     df["contract_date"] = pd.to_datetime(df["contract_date"], errors="coerce").dt.date
     for col in ["original_value", "amendment_value", "current_value"]:
@@ -86,6 +122,8 @@ def load_contracts() -> pd.DataFrame:
         _safe_ratio(a, o) for a, o in zip(df["amendment_value"], df["original_value"])
     ]
     df = df.dropna(subset=["amendment_ratio", "original_value", "amendment_value"])
+    if "solicitation_procedure_raw" not in df.columns:
+        df["solicitation_procedure_raw"] = df["solicitation_procedure"]
     return df
 
 
@@ -98,12 +136,12 @@ def format_currency(x: float | None) -> str:
 def format_ratio(r: float | None) -> str:
     if r is None or pd.isna(r):
         return "—"
-    return f"{r:.2f}×"
+    return f"{r * 100:.1f}%"
 
 
 def classify_claim(contract: pd.Series) -> ClaimValidity:
     ratio = float(contract["amendment_ratio"])
-    sole_source = str(contract["solicitation_procedure"]).strip().lower() == "non-competitive"
+    sole_source = _is_non_competitive(contract)
 
     # Detection-first: we keep claim strength conservative and non-accusatory.
     if ratio > 3.0 and sole_source:
@@ -130,9 +168,7 @@ def synthesize_amendment_timeline(contract: pd.Series) -> list[dict]:
     original = float(contract["original_value"])
     amendment = float(contract["amendment_value"])
     current = float(contract["current_value"])
-    proc = str(contract["solicitation_procedure"]).strip().lower()
-
-    if proc == "non-competitive":
+    if _is_non_competitive(contract):
         steps = [0.35, 0.70, 1.00]
         labels = ["Amendment A", "Amendment B", "Amendment C"]
     else:
@@ -190,7 +226,7 @@ def evaluate_gates(contract: pd.Series, timeline: list[dict]) -> tuple[list[Gate
         )
 
     ratio = float(contract["amendment_ratio"])
-    sole_source = str(contract["solicitation_procedure"]).strip().lower() == "non-competitive"
+    sole_source = _is_non_competitive(contract)
     claim = classify_claim(contract)
 
     if ratio > 1.0 and sole_source:
@@ -238,7 +274,7 @@ def evaluate_gates(contract: pd.Series, timeline: list[dict]) -> tuple[list[Gate
             "Multiple amendment steps in dummy timeline: pattern persists across periods.",
         )
 
-    if str(contract["solicitation_procedure"]).strip().lower() == "competitive":
+    if not _is_non_competitive(contract):
         ag06 = GateResult(
             "AG-06 Program/Policy Coherence",
             "PASS",
@@ -336,8 +372,8 @@ def main() -> None:
             use_container_width=True,
             hide_index=True,
             column_config={
-                "avg_ratio": st.column_config.NumberColumn(format="%.2f×"),
-                "max_ratio": st.column_config.NumberColumn(format="%.2f×"),
+                "avg_ratio": st.column_config.NumberColumn(format="%.2f"),
+                "max_ratio": st.column_config.NumberColumn(format="%.2f"),
             },
         )
     with right:
@@ -377,7 +413,7 @@ def main() -> None:
             "original_value": st.column_config.NumberColumn(format="$%,.0f"),
             "amendment_value": st.column_config.NumberColumn(format="$%,.0f"),
             "current_value": st.column_config.NumberColumn(format="$%,.0f"),
-            "amendment_ratio": st.column_config.NumberColumn(format="%.2f×"),
+            "amendment_ratio": st.column_config.NumberColumn(format="%.3f"),
         },
     )
 

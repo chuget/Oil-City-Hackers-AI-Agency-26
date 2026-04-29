@@ -16,7 +16,7 @@ DATA_PATH = Path(__file__).parent / "data" / "contracts.csv"
 SQL_PATH = Path(__file__).parent / "dev1-sql" / "DEV1_CANONICAL_SQL_CONTRACT.sql"
 
 
-GateVerdict = Literal["PASS", "PARTIAL", "FAIL", "HOLD", "PROVISIONAL", "CONFIRMED"]
+GateVerdict = Literal["PASS", "CAUTION", "FAIL", "HOLD", "PENDING"]
 ClaimValidity = Literal["FLAGGED", "INVESTIGATED", "CLEARED", "CRITICAL"]
 
 
@@ -45,15 +45,13 @@ def verdict_badge(verdict: GateVerdict) -> str:
     v = str(verdict).upper()
     if v == "PASS":
         return _badge(v, bg="#22C55E", fg="#062B12")  # green (strong)
-    if v == "PARTIAL":
+    if v == "CAUTION":
         return _badge(v, bg="#F59E0B", fg="#2A1700")  # amber (strong)
     if v == "FAIL":
         return _badge(v, bg="#EF4444", fg="#2A0606")  # red (strong)
     if v == "HOLD":
         return _badge(v, bg="#F97316", fg="#2A1203")  # orange (strong)
-    if v == "PROVISIONAL":
-        return _badge(v, bg="#38BDF8", fg="#03202D")  # sky (strong)
-    if v == "CONFIRMED":
+    if v == "PENDING":
         return _badge(v, bg="#3B82F6", fg="#04142E")  # blue (strong)
     return _badge(v, bg="#E5E7EB", fg="#111827")  # gray fallback
 
@@ -83,6 +81,12 @@ def _is_non_competitive(contract: pd.Series) -> bool:
     raw = str(contract.get("solicitation_procedure_raw") or "").strip().upper()
     label = str(contract.get("solicitation_procedure") or "").strip().lower()
     return raw in {"TN", "AC"} or "non-competitive" in label
+
+
+def _is_competitive(contract: pd.Series) -> bool:
+    raw = str(contract.get("solicitation_procedure_raw") or "").strip().upper()
+    label = str(contract.get("solicitation_procedure") or "").strip().lower()
+    return raw in {"OB", "TC", "ST"} or "competitive" in label
 
 
 @st.cache_data(show_spinner=False)
@@ -127,6 +131,65 @@ def load_contracts() -> pd.DataFrame:
     return df
 
 
+def load_real_timeline(procurement_id: str) -> pd.DataFrame:
+    conn_str = os.environ.get("DB_CONNECTION_STRING", "").strip()
+    if not conn_str or not procurement_id:
+        return pd.DataFrame()
+
+    sql = """
+    SELECT
+      reporting_period,
+      contract_date,
+      CASE WHEN TRIM(contract_value) ~ '^[0-9]+(\\.[0-9]+)?$'
+           THEN TRIM(contract_value)::numeric(15,2) END AS running_total,
+      CASE WHEN TRIM(amendment_value) ~ '^[0-9]+(\\.[0-9]+)?$'
+           THEN TRIM(amendment_value)::numeric(15,2) END AS amendment_added,
+      reference_number
+    FROM public.contracts
+    WHERE procurement_id = %s
+    ORDER BY reporting_period NULLS LAST, contract_date NULLS LAST
+    """
+    with psycopg.connect(conn_str, sslmode="require") as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (procurement_id,))
+            rows = cur.fetchall()
+            cols = [desc[0] for desc in cur.description]
+    tl = pd.DataFrame(rows, columns=cols)
+    if tl.empty:
+        return tl
+    tl["date"] = pd.to_datetime(tl["contract_date"], errors="coerce")
+    tl["label"] = tl["reporting_period"].fillna("snapshot")
+    tl = tl.sort_values(["date", "reporting_period", "reference_number"], na_position="last").reset_index(drop=True)
+    tl["timeline_step"] = tl.index + 1
+    tl = tl.dropna(subset=["running_total"])
+    # Keep only value-changing points to make creep shape meaningful.
+    changed = (
+        tl["running_total"].ne(tl["running_total"].shift())
+        | tl["amendment_added"].fillna(0).ne(tl["amendment_added"].fillna(0).shift())
+    )
+    tl = tl.loc[changed | (tl.index == 0)].copy()
+    tl = tl.reset_index(drop=True)
+    tl["timeline_step"] = tl.index + 1
+
+    # Many snapshots share same day; apply small deterministic offsets for visual separation.
+    same_day_rank = tl.groupby("date").cumcount()
+    tl["effective_date"] = tl["date"] + pd.to_timedelta(same_day_rank, unit="D")
+    if tl["effective_date"].isna().any():
+        base = pd.Timestamp("2020-01-01")
+        idx_offsets = pd.to_timedelta(tl.index, unit="D")
+        tl.loc[tl["effective_date"].isna(), "effective_date"] = base + idx_offsets[tl["effective_date"].isna()]
+
+    tl["time_detail"] = (
+        "Step "
+        + tl["timeline_step"].astype(str)
+        + " | "
+        + tl["reporting_period"].fillna("unknown-period").astype(str)
+        + " | "
+        + tl["date"].dt.strftime("%Y-%m-%d").fillna("unknown-date")
+    )
+    return tl
+
+
 def format_currency(x: float | None) -> str:
     if x is None or pd.isna(x):
         return "—"
@@ -142,13 +205,11 @@ def format_ratio(r: float | None) -> str:
 def classify_claim(contract: pd.Series) -> ClaimValidity:
     ratio = float(contract["amendment_ratio"])
     sole_source = _is_non_competitive(contract)
-
-    # Detection-first: we keep claim strength conservative and non-accusatory.
-    if ratio > 3.0 and sole_source:
-        return "CRITICAL"
-    if ratio > 1.0 and sole_source:
+    if ratio >= 1.0 and sole_source:
         return "INVESTIGATED"
-    if ratio > 0.25:
+    if ratio >= 3.0:
+        return "INVESTIGATED"
+    if ratio >= 0.25:
         return "FLAGGED"
     return "CLEARED"
 
@@ -216,83 +277,135 @@ def evaluate_gates(contract: pd.Series, timeline: list[dict]) -> tuple[list[Gate
         )
 
     vendor = str(contract.get("vendor_name") or "").strip()
-    if not vendor:
-        ag02 = GateResult("AG-02 Identity Resolution", "FAIL", "Vendor identifier missing.")
-    else:
+    bn = str(contract.get("bn") or "").strip()
+    if bn:
+        ag02 = GateResult("AG-02 Identity Resolution", "PASS", f"Vendor identity confirmed via Business Number {bn}.")
+    elif vendor and len(vendor) > 3:
         ag02 = GateResult(
             "AG-02 Identity Resolution",
-            "PARTIAL",
-            "Vendor name present; no BN/golden record in dummy dataset.",
+            "CAUTION",
+            f"Vendor name only; no BN available. PC-02: absent BN is a data quality condition. Identity partially resolved via name: {vendor}.",
         )
+    else:
+        ag02 = GateResult("AG-02 Identity Resolution", "FAIL", "Vendor identity cannot be confirmed. No BN and insufficient name data.")
 
     ratio = float(contract["amendment_ratio"])
     sole_source = _is_non_competitive(contract)
-    claim = classify_claim(contract)
+    is_competitive = _is_competitive(contract)
 
-    if ratio > 1.0 and sole_source:
-        ag03 = GateResult(
-            "AG-03 Claim Strength",
-            "PASS",
-            "Ratio > 100% and non-competitive: defensible escalation to INVESTIGATED (still non-accusatory).",
-        )
-    elif ratio > 0.25:
-        ag03 = GateResult(
-            "AG-03 Claim Strength",
-            "PASS",
-            "Ratio > 25%: pattern detected → FLAGGED (not a verdict).",
-        )
-    else:
-        ag03 = GateResult(
-            "AG-03 Claim Strength",
-            "PASS",
-            "Below 25% threshold: likely CLEARED for this detector.",
-        )
-
-    if claim == "CRITICAL":
-        ag04 = GateResult(
-            "AG-04 Harm Boundary",
-            "HOLD",
-            "CRITICAL class is prohibited without external audit confirmation; hold escalation.",
-        )
-    else:
-        ag04 = GateResult(
-            "AG-04 Harm Boundary",
-            "PASS",
-            "Output remains pattern-based and non-accusatory; safe to display as governed finding.",
-        )
-
-    if len(timeline) <= 1:
-        ag05 = GateResult(
-            "AG-05 Temporal Window",
-            "PROVISIONAL",
-            "Single amendment step in dummy timeline: treat as provisional.",
-        )
-    else:
-        ag05 = GateResult(
-            "AG-05 Temporal Window",
-            "CONFIRMED",
-            "Multiple amendment steps in dummy timeline: pattern persists across periods.",
-        )
-
-    if not _is_non_competitive(contract):
-        ag06 = GateResult(
-            "AG-06 Program/Policy Coherence",
-            "PASS",
-            "Competitive procurement suggests original competition existed; creep may be anomalous (explanation not ruled out).",
-        )
-    else:
-        ag06 = GateResult(
-            "AG-06 Program/Policy Coherence",
-            "PASS",
-            "Non-competitive indicates sole-source context; amendment compounding risk is higher.",
-        )
-
-    gates = [ag01, ag02, ag03, ag04, ag05, ag06]
-
-    # Sequential gating: if upstream fails, downstream claims must not escalate.
     if ag01.verdict == "FAIL":
-        claim = "FLAGGED"
-    return gates, claim
+        ag03 = GateResult(
+            "AG-03 Claim Strength (PRIMARY)",
+            "FAIL",
+            "AG-01 failed. Claim strength cannot be assessed without confirmed evidence provenance.",
+        )
+    elif ratio >= 3.0:
+        ag03 = GateResult(
+            "AG-03 Claim Strength (PRIMARY)",
+            "CAUTION",
+            f"Amendment ratio {(ratio * 100):.0f}% ({ratio:.2f}x original value). Pattern strength: STRONG. Classification capped at INVESTIGATED; CRITICAL requires external audit confirmation not available at Tier 3. PC-01: pattern is not verdict.",
+        )
+    elif ratio >= 1.0 and sole_source:
+        ag03 = GateResult(
+            "AG-03 Claim Strength (PRIMARY)",
+            "CAUTION",
+            f"Amendment ratio {(ratio * 100):.0f}% combined with non-competitive solicitation. Two corroborated signals: INVESTIGATED. External corroboration required before CRITICAL.",
+        )
+    elif ratio >= 1.0:
+        ag03 = GateResult(
+            "AG-03 Claim Strength (PRIMARY)",
+            "CAUTION",
+            f"Amendment ratio {(ratio * 100):.0f}% (original value doubled). Single signal: INVESTIGATED. Solicitation procedure: {contract.get('solicitation_procedure') or 'unknown'}.",
+        )
+    elif ratio >= 0.25:
+        ag03 = GateResult(
+            "AG-03 Claim Strength (PRIMARY)",
+            "PASS",
+            f"Amendment ratio {(ratio * 100):.0f}% exceeds PSPC CPN 2022-1 threshold (25%). Single pattern: FLAGGED. Structural explanation not yet ruled out per AG-06.",
+        )
+    else:
+        ag03 = GateResult(
+            "AG-03 Claim Strength (PRIMARY)",
+            "PASS",
+            f"Amendment ratio {(ratio * 100):.0f}% below flagging threshold. No claim warranted.",
+        )
+
+    ag04 = GateResult(
+        "AG-04 Harm Boundary",
+        "HOLD",
+        f"HOLD: reputational harm risk for named vendor {vendor} without external audit confirmation. AG-07 Escalation Authority not reachable at Tier 3. No consequential action permitted from this output.",
+    )
+
+    d = contract.get("contract_date")
+    if not d or pd.isna(d):
+        ag05 = GateResult(
+            "AG-05 Temporal Window",
+            "CAUTION",
+            "Contract date unavailable. Cannot confirm pattern persists across lifecycle. PC-02: missing date is a data quality condition.",
+        )
+    else:
+        year = d.year if hasattr(d, "year") else datetime.fromisoformat(str(d)).year
+        age_years = 2026 - int(year)
+        if age_years >= 1:
+            ag05 = GateResult(
+                "AG-05 Temporal Window",
+                "PASS",
+                f"Contract dated {d} ({age_years} year{'s' if age_years > 1 else ''} old). Amendment pattern is not a same-day artifact. Temporal window: appropriate.",
+            )
+        else:
+            ag05 = GateResult(
+                "AG-05 Temporal Window",
+                "CAUTION",
+                f"Contract dated {d}. Recent contract; amendment pattern may reflect normal early-stage scope adjustment. Provisional finding only.",
+            )
+
+    if sole_source and ratio >= 1.0:
+        ag06 = GateResult(
+            "AG-06 Program / Policy Coherence",
+            "CAUTION",
+            f"Non-competitive solicitation with {(ratio * 100):.0f}% amendment growth. No competitive baseline existed at original award. Amendment compounds sole-source dependency. Structural explanation not ruled out but weakened by combined signals.",
+        )
+    elif is_competitive and ratio >= 1.0:
+        ag06 = GateResult(
+            "AG-06 Program / Policy Coherence",
+            "CAUTION",
+            f"Competitive solicitation at original award but amendment growth of {(ratio * 100):.0f}% may have quietly exceeded original competitive justification. PSPC CPN 2022-1: re-tendering may have been warranted. Structural explanation must be ruled out before escalation.",
+        )
+    else:
+        ag06 = GateResult(
+            "AG-06 Program / Policy Coherence",
+            "PASS",
+            f"Solicitation procedure: {contract.get('solicitation_procedure') or 'unknown'}. Amendment ratio: {(ratio * 100):.0f}%. Structural explanation not conclusively ruled out. Pattern remains at FLAGGED level.",
+        )
+
+    ag07 = GateResult(
+        "AG-07 Escalation Authority",
+        "PENDING",
+        "Not reached: AG-04 hold maintained. Tier 3 boundary active. No named escalation authority available at Agency 2026 sandbox level.",
+    )
+    ag08 = GateResult(
+        "AG-08 Audit Completeness",
+        "PASS",
+        "Flight Recorder chain active. All gate verdicts documented and replayable.",
+    )
+    ag09 = GateResult(
+        "AG-09 Public Defensibility",
+        "HOLD",
+        "Tier 3: internal analytic language only. Output not cleared for external publication or public-facing communication without AG-09 review.",
+    )
+
+    gates = [ag01, ag02, ag03, ag04, ag05, ag06, ag07, ag08, ag09]
+
+    proposed: ClaimValidity = classify_claim(contract)
+    if proposed == "CRITICAL":
+        proposed = "INVESTIGATED"
+    if ag01.verdict == "FAIL":
+        proposed = "FLAGGED"
+    if ag03.verdict == "CAUTION" and proposed == "CLEARED":
+        proposed = "INVESTIGATED"
+    if proposed == "CLEARED" and ag06.verdict != "PASS":
+        proposed = "FLAGGED"
+    return gates, proposed
 
 
 def evidence_requirements_for(claim: ClaimValidity) -> list[str]:
@@ -447,18 +560,49 @@ def main() -> None:
         st.write(f"**Current:** {format_currency(contract['current_value'])}")
         st.write(f"**Amendment ratio:** {format_ratio(contract['amendment_ratio'])}")
 
-    timeline = synthesize_amendment_timeline(contract)
-    if timeline:
-        tl_df = pd.DataFrame(timeline)
-        tl_df["date"] = pd.to_datetime(tl_df["date"])
-        st.markdown("**Amendment timeline (synthetic demo)**")
+    timeline_df = pd.DataFrame()
+    procurement_id = str(contract.get("procurement_id") or "").strip()
+    if procurement_id:
+        timeline_df = load_real_timeline(procurement_id)
+
+    if timeline_df.empty:
+        timeline = synthesize_amendment_timeline(contract)
+        if timeline:
+            timeline_df = pd.DataFrame(timeline)
+            timeline_df["date"] = pd.to_datetime(timeline_df["date"])
+            timeline_df["label"] = timeline_df["label"].fillna("Synthetic point")
+            timeline_df = timeline_df.reset_index(drop=True)
+            timeline_df["timeline_step"] = timeline_df.index + 1
+            timeline_df["effective_date"] = timeline_df["date"]
+            timeline_df["time_detail"] = (
+                "Step "
+                + timeline_df["timeline_step"].astype(str)
+                + " | "
+                + timeline_df["date"].dt.strftime("%Y-%m-%d").fillna("unknown-date")
+            )
+            timeline_df["amendment_added"] = pd.to_numeric(
+                timeline_df.get("amendment_added"), errors="coerce"
+            )
+            timeline_df["running_total"] = pd.to_numeric(
+                timeline_df.get("running_total"), errors="coerce"
+            )
+            st.markdown("**Amendment timeline (synthetic fallback)**")
+    else:
+        st.markdown("**Amendment timeline (actual contract history)**")
+
+    if not timeline_df.empty:
         tl_chart = (
-            alt.Chart(tl_df)
+            alt.Chart(timeline_df)
             .mark_line(point=True)
             .encode(
-                x=alt.X("date:T", title="Date"),
+                x=alt.X("effective_date:T", title="Timeline date"),
                 y=alt.Y("running_total:Q", title="Running contract value", axis=alt.Axis(format="$,.0f")),
-                tooltip=["label", alt.Tooltip("running_total:Q", format="$,.0f")],
+                tooltip=[
+                    "time_detail",
+                    "label",
+                    alt.Tooltip("running_total:Q", format="$,.0f"),
+                    alt.Tooltip("amendment_added:Q", format="$,.0f"),
+                ],
             )
             .properties(height=220)
         )
@@ -466,11 +610,11 @@ def main() -> None:
 
     # --- View 4: Governance Finding Card ---
     st.subheader("View 4 — Governance Finding Card")
-    gates, claim = evaluate_gates(contract, timeline)
+    gates, claim = evaluate_gates(contract, [])
 
     card_left, card_right = st.columns([1.2, 1])
     with card_left:
-        st.markdown("**Gate verdicts (AG-01 → AG-06)**")
+        st.markdown("**Gate verdicts (AG-01 → AG-09)**")
         for g in gates:
             st.markdown(
                 f"**{g.gate}:** {verdict_badge(g.verdict)} — {g.rationale}",

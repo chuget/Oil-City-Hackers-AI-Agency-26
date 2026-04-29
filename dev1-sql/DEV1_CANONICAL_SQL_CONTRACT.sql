@@ -13,6 +13,8 @@ WITH typed AS (
   SELECT
     id,
     reference_number,
+    procurement_id,
+    reporting_period,
     vendor_name,
     owner_org_title AS department,
     contract_date,
@@ -35,6 +37,8 @@ scored AS (
   SELECT
     id,
     reference_number,
+    procurement_id,
+    reporting_period,
     vendor_name,
     department,
     contract_date,
@@ -58,6 +62,9 @@ scored AS (
     AND amendment_value_num > 0
 )
 SELECT
+  reference_number,
+  procurement_id,
+  reporting_period,
   vendor_name AS vendor,
   department,
   original_value_num AS original_value,

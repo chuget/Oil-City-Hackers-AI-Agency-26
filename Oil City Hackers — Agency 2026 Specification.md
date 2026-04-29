@@ -22,7 +22,9 @@ with explicit evidence requirements before escalation.
 ## Database Connection
 
 PostgreSQL (read-only):
-postgresql://database_database_w2a1_user:JvqVh0msmuBrwgING68S52H0sz3wEEXI@dpg-d7auudv5r7bs738iqh70-b.replica-cyan.oregon-postgres.render.com/database_database_w2a1
+Set `DB_CONNECTION_STRING` via environment (do not hardcode credentials in docs/code).
+Example format:
+`postgresql://<user>:<password>@<host>/<database>`
 
 **CRITICAL — PC-12 Summation Discipline:**
 Never use raw SUM of agreement_value from grants_contributions.

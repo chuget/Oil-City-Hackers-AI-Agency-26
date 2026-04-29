@@ -750,7 +750,8 @@ ORDER BY amendment_ratio DESC NULLS LAST
 LIMIT 20
 
 Database connection string:
-postgresql://database_database_w2a1_user:JvqVh0msmuBrwgING68S52H0sz3wEEXI@dpg-d7auudv5r7bs738iqh70-b.replica-cyan.oregon-postgres.render.com/database_database_w2a1
+Use `DB_CONNECTION_STRING` from environment variables.
+Example format: `postgresql://<user>:<password>@<host>/<database>`
 ```
 
 ---

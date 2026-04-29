@@ -18,15 +18,15 @@ WITH typed AS (
     contract_date,
     solicitation_procedure AS solicitation_procedure_raw,
     CASE
-      WHEN TRIM(original_value) ~ '^[0-9]+(\\.[0-9]+)?$'
+      WHEN TRIM(original_value) ~ '^[0-9]+(\.[0-9]+)?$'
       THEN TRIM(original_value)::numeric(15,2)
     END AS original_value_num,
     CASE
-      WHEN TRIM(amendment_value) ~ '^[0-9]+(\\.[0-9]+)?$'
+      WHEN TRIM(amendment_value) ~ '^[0-9]+(\.[0-9]+)?$'
       THEN TRIM(amendment_value)::numeric(15,2)
     END AS amendment_value_num,
     CASE
-      WHEN TRIM(contract_value) ~ '^[0-9]+(\\.[0-9]+)?$'
+      WHEN TRIM(contract_value) ~ '^[0-9]+(\.[0-9]+)?$'
       THEN TRIM(contract_value)::numeric(15,2)
     END AS current_value_num
   FROM public.contracts
@@ -77,11 +77,11 @@ ORDER BY amendment_ratio DESC NULLS LAST;
 WITH typed AS (
   SELECT
     CASE
-      WHEN TRIM(original_value) ~ '^[0-9]+(\\.[0-9]+)?$'
+      WHEN TRIM(original_value) ~ '^[0-9]+(\.[0-9]+)?$'
       THEN TRIM(original_value)::numeric(15,2)
     END AS original_value_num,
     CASE
-      WHEN TRIM(amendment_value) ~ '^[0-9]+(\\.[0-9]+)?$'
+      WHEN TRIM(amendment_value) ~ '^[0-9]+(\.[0-9]+)?$'
       THEN TRIM(amendment_value)::numeric(15,2)
     END AS amendment_value_num
   FROM public.contracts

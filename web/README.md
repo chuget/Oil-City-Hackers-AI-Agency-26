@@ -1,6 +1,6 @@
 # Oil City Hackers API
 
-Next.js/TypeScript scaffold for the Dev 2 API layer.
+Next.js/TypeScript API app for ranked contract cases, governance findings, optional Bedrock explanations, and optional S3 exports.
 
 ## Run
 
@@ -9,27 +9,40 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:3000.
+Open:
+
+```text
+http://localhost:3000
+```
+
+On Windows PowerShell, if script execution blocks npm shims, run:
+
+```powershell
+.\node_modules\.bin\next.cmd dev --hostname 127.0.0.1 --port 3000
+```
 
 ## Environment
 
 Copy `.env.example` to `.env.local`.
 
-```bash
+```text
 DATABASE_URL=
 CASE_DATASET=mock
 AWS_DEFAULT_REGION=us-west-2
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY=
+AWS_SESSION_TOKEN=
 BEDROCK_MODEL_ID=
 CASE_EXPORT_BUCKET=
 ```
 
 `CASE_DATASET` supports:
 
-- `mock`: fixture data for frontend/governance integration
-- `alberta`: `ab.ab_sole_source` + `ab.ab_contracts`
+- `mock`: fixture data for local integration
+- `alberta`: live Alberta candidate query
 - `federal`: legacy `public.contracts` candidate query
 
-Do not commit real database credentials.
+Do not commit real database or AWS credentials.
 
 ## API Endpoints
 
@@ -43,7 +56,26 @@ POST /api/explain
 POST /api/exports/cases
 ```
 
-`POST /api/govern` accepts:
+## Governance
+
+`POST /api/govern` is wired to the full Dev 3 governance implementation in:
+
+```text
+src/lib/governance.ts
+```
+
+It runs AG-01 through AG-09 and returns:
+
+- `claim_state`
+- `gates`
+- `evidence`
+- `data_gaps`
+- `pc_rules_applied`
+- `bounded_output_card`
+- `flight_recorder`
+- `next_step`
+
+Example request:
 
 ```json
 {
@@ -63,15 +95,17 @@ POST /api/exports/cases
 }
 ```
 
-It returns `{ "ok": true, "finding": GovernedFinding }`.
+Response:
 
-## Dev 3 Handoff
-
-Replace `src/lib/governance.ts` with the full AG-01 through AG-09 implementation when ready. The route already imports `governContract(contract)`.
-
-## Dev 4 Handoff
-
-Use `/api/cases` for the ranked table and `/api/govern` for the governed finding card. Mock cases are available immediately without a database.
+```json
+{
+  "ok": true,
+  "finding": {
+    "claim_state": "INVESTIGATED",
+    "gates": []
+  }
+}
+```
 
 ## AWS
 
@@ -94,3 +128,10 @@ Returns: { "ok": true, "destination": { "bucket": "...", "key": "..." } }
 ```
 
 Set `CASE_EXPORT_BUCKET` to an existing S3 bucket before using the export route.
+
+## Checks
+
+```powershell
+.\node_modules\.bin\eslint.cmd .
+.\node_modules\.bin\next.cmd build
+```

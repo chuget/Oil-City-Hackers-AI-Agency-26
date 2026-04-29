@@ -8,6 +8,7 @@ applications:
             - npm ci
         build:
           commands:
+            - env | grep -e DATABASE_URL -e CASE_DATASET -e HACKATHON_AWS_REGION -e HACKATHON_AWS_ACCESS_KEY_ID -e HACKATHON_AWS_SECRET_ACCESS_KEY -e HACKATHON_AWS_SESSION_TOKEN -e BEDROCK_MODEL_ID -e CASE_EXPORT_BUCKET >> .env.production
             - npm run build
       artifacts:
         baseDirectory: .next

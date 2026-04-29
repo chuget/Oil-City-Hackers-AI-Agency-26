@@ -1,0 +1,21 @@
+reference_number,vendor_name,department,description,contract_date,original_value,amendment_value,current_value,solicitation_procedure
+CN-2024-0001,Northern Systems Ltd,Public Services and Procurement Canada,IT services - hosting and operations,2024-01-15,50000,25000,75000,Competitive
+CN-2024-0002,Maple Analytics Inc,Treasury Board Secretariat,Data analysis support services,2024-02-03,20000,12000,32000,Competitive
+CN-2024-0003,Arctic Consulting Group,Immigration Refugees and Citizenship Canada,Program support and advisory,2024-02-18,30000,45000,75000,Non-competitive
+CN-2024-0004,Red River Tech,Health Canada,Software maintenance and support,2024-03-01,25000,5000,30000,Competitive
+CN-2024-0005,SignalBridge Solutions,Transport Canada,Network equipment and installation,2024-03-08,40000,60000,100000,Non-competitive
+CN-2024-0006,Evergreen Services Co,Environment and Climate Change Canada,Field operations support,2024-03-22,15000,10000,25000,Competitive
+CN-2024-0007,BluePeak Digital,National Defence,Application modernization,2024-04-02,80000,120000,200000,Non-competitive
+CN-2024-0008,Orchard Security Ltd,Shared Services Canada,Security assessment services,2024-04-11,45000,15000,60000,Competitive
+CN-2024-0009,Prairie Logistics Group,Canada Border Services Agency,Warehousing and logistics support,2024-04-19,22000,28000,50000,Non-competitive
+CN-2024-0010,Lighthouse Media Studio,Canadian Heritage,Communications and design services,2024-04-25,12000,6000,18000,Competitive
+CN-2024-0011,Cascade Cloud Partners,Public Services and Procurement Canada,Cloud migration assistance,2024-05-05,60000,90000,150000,Non-competitive
+CN-2024-0012,Golden Maple Research,Treasury Board Secretariat,Policy research support,2024-05-12,18000,9000,27000,Competitive
+CN-2024-0013,Ironwood Engineering,Transport Canada,Engineering review services,2024-05-20,35000,20000,55000,Competitive
+CN-2024-0014,Northstar Integration,Shared Services Canada,Enterprise integration services,2024-06-01,50000,80000,130000,Non-competitive
+CN-2024-0015,Sunrise Project Office,Health Canada,Project management support,2024-06-08,24000,26000,50000,Non-competitive
+CN-2024-0016,WestWind Supplies,Environment and Climate Change Canada,Equipment procurement support,2024-06-16,11000,4000,15000,Competitive
+CN-2024-0017,Polar Data Works,Canada Border Services Agency,Data pipeline enhancements,2024-06-23,26000,52000,78000,Non-competitive
+CN-2024-0018,Bridgewater Consulting,Immigration Refugees and Citizenship Canada,Service design support,2024-07-02,30000,15000,45000,Competitive
+CN-2024-0019,Silverline Tech Ops,National Defence,Operations and sustainment,2024-07-10,70000,210000,280000,Non-competitive
+CN-2024-0020,Harbourview QA Labs,Canadian Heritage,Quality assurance services,2024-07-18,14000,6000,20000,Competitive

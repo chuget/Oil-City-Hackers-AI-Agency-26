@@ -4,6 +4,8 @@ const endpoints = [
   { method: "GET", path: "/api/cases", description: "Ranked contract candidates" },
   { method: "GET", path: "/api/cases/DEMO-INV-001", description: "Single candidate detail" },
   { method: "POST", path: "/api/govern", description: "Governance finding for a ContractCandidate" },
+  { method: "POST", path: "/api/explain", description: "Bedrock summary for a GovernedFinding" },
+  { method: "POST", path: "/api/exports/cases", description: "S3 JSON snapshot export" },
 ];
 
 export default function Home() {

@@ -18,6 +18,9 @@ Copy `.env.example` to `.env.local`.
 ```bash
 DATABASE_URL=
 CASE_DATASET=mock
+AWS_DEFAULT_REGION=us-west-2
+BEDROCK_MODEL_ID=
+CASE_EXPORT_BUCKET=
 ```
 
 `CASE_DATASET` supports:
@@ -36,6 +39,8 @@ GET  /api/db/schema
 GET  /api/cases
 GET  /api/cases/:reference_number
 POST /api/govern
+POST /api/explain
+POST /api/exports/cases
 ```
 
 `POST /api/govern` accepts:
@@ -67,3 +72,25 @@ Replace `src/lib/governance.ts` with the full AG-01 through AG-09 implementation
 ## Dev 4 Handoff
 
 Use `/api/cases` for the ranked table and `/api/govern` for the governed finding card. Mock cases are available immediately without a database.
+
+## AWS
+
+Amplify hosting uses the root `amplify.yml` build spec and the `web/` app root.
+
+Bedrock is optional and explanation-only:
+
+```text
+POST /api/explain
+Body: { "finding": GovernedFinding }
+Returns: { "ok": true, "summary": "..." }
+```
+
+S3 exports are optional:
+
+```text
+POST /api/exports/cases
+Body: { "limit": 50 }
+Returns: { "ok": true, "destination": { "bucket": "...", "key": "..." } }
+```
+
+Set `CASE_EXPORT_BUCKET` to an existing S3 bucket before using the export route.

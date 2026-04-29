@@ -91,7 +91,10 @@ def _is_competitive(contract: pd.Series) -> bool:
 
 @st.cache_data(show_spinner=False)
 def load_contracts() -> pd.DataFrame:
-    conn_str = os.environ.get("DB_CONNECTION_STRING", "").strip()
+    conn_str = (
+        os.environ.get("DB_CONNECTION_STRING")
+        or st.secrets.get("DB_CONNECTION_STRING", "")
+    ).strip()
     if conn_str:
         sql = SQL_PATH.read_text(encoding="utf-8").split(";")[0].strip()
         with psycopg.connect(conn_str, sslmode="require") as conn:
@@ -132,7 +135,10 @@ def load_contracts() -> pd.DataFrame:
 
 
 def load_real_timeline(procurement_id: str) -> pd.DataFrame:
-    conn_str = os.environ.get("DB_CONNECTION_STRING", "").strip()
+    conn_str = (
+        os.environ.get("DB_CONNECTION_STRING")
+        or st.secrets.get("DB_CONNECTION_STRING", "")
+    ).strip()
     if not conn_str or not procurement_id:
         return pd.DataFrame()
 

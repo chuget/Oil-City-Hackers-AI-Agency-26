@@ -2,10 +2,10 @@ import {
   BedrockRuntimeClient,
   ConverseCommand,
 } from "@aws-sdk/client-bedrock-runtime";
-import { getAwsRegion, requireEnv } from "@/lib/aws/config";
+import { getAwsClientConfig, requireEnv } from "@/lib/aws/config";
 import type { GovernedFinding } from "@/types/governance";
 
-const client = new BedrockRuntimeClient({ region: getAwsRegion() });
+const client = new BedrockRuntimeClient(getAwsClientConfig());
 
 export async function explainFinding(finding: GovernedFinding) {
   const modelId = requireEnv("BEDROCK_MODEL_ID");

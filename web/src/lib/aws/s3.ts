@@ -1,7 +1,7 @@
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import { getAwsRegion, requireEnv } from "@/lib/aws/config";
+import { getAwsClientConfig, getAwsRegion, requireEnv } from "@/lib/aws/config";
 
-const client = new S3Client({ region: getAwsRegion() });
+const client = new S3Client(getAwsClientConfig());
 
 export async function putJsonSnapshot(key: string, payload: unknown) {
   const bucket = requireEnv("CASE_EXPORT_BUCKET");

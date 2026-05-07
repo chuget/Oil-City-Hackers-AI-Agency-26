@@ -1,448 +1,271 @@
+"""
+Streamlit UI for Public Contract Change Monitor.
+Core logic lives in monitor_core.py / monitor_charts.py / monitor_dashboard.py.
+HTML dashboard: uvicorn monitor_site.server:app (see README).
+"""
+
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import date, datetime, timedelta
 import os
-from pathlib import Path
-from typing import Literal
 
 import altair as alt
 import pandas as pd
-import psycopg
 import streamlit as st
 
+try:
+    from dotenv import load_dotenv
 
-DATA_PATH = Path(__file__).parent / "data" / "contracts.csv"
-SQL_PATH = Path(__file__).parent / "dev1-sql" / "DEV1_CANONICAL_SQL_CONTRACT.sql"
+    load_dotenv()
+except ImportError:
+    pass
+
+from monitor_charts import (
+    amendment_ratio_histogram_spec,
+    dept_flagged_chart_spec,
+    solicitation_procedure_chart_spec,
+    timeline_chart_spec,
+)
+from monitor_core import (
+    evaluate_gates,
+    evidence_requirements_for,
+    format_currency,
+    format_ratio,
+    load_contracts,
+    load_real_timeline,
+    synthesize_amendment_timeline,
+    verdict_badge,
+    claim_badge,
+)
+from monitor_dashboard import PC_RULE_REMINDERS
 
 
-GateVerdict = Literal["PASS", "CAUTION", "FAIL", "HOLD", "PENDING"]
-ClaimValidity = Literal["FLAGGED", "INVESTIGATED", "CLEARED", "CRITICAL"]
+def _bridge_streamlit_secrets_to_environ() -> None:
+    try:
+        if not os.environ.get("DB_CONNECTION_STRING"):
+            v = st.secrets.get("DB_CONNECTION_STRING", "")
+            if str(v).strip():
+                os.environ["DB_CONNECTION_STRING"] = str(v).strip()
+        if not os.environ.get("DATABASE_URL"):
+            v = st.secrets.get("DATABASE_URL", "")
+            if str(v).strip():
+                os.environ["DATABASE_URL"] = str(v).strip()
+    except Exception:
+        pass
 
 
-@dataclass(frozen=True)
-class GateResult:
-    gate: str
-    verdict: GateVerdict
-    rationale: str
-
-
-def _badge(text: str, bg: str, fg: str = "#0b1220") -> str:
-    safe = str(text).replace("<", "&lt;").replace(">", "&gt;")
-    return (
-        f"<span style='display:inline-block;"
-        f"padding:0.14rem 0.6rem;border-radius:999px;"
-        f"background:{bg};color:{fg};font-weight:800;"
-        f"font-size:0.80rem;letter-spacing:0.03em;"
-        f"border:1px solid rgba(255,255,255,0.18);"
-        f"box-shadow:0 0 0 1px rgba(0,0,0,0.35), 0 6px 18px rgba(0,0,0,0.25)'>"
-        f"{safe}"
-        f"</span>"
+def apply_ui_theme() -> None:
+    st.markdown(
+        """
+        <style>
+          :root {
+            --bg-deep: #0B1220;
+            --bg-panel: #0F172A;
+            --bg-panel-soft: #111827;
+            --line-soft: #1F2937;
+            --line-strong: #334155;
+            --text-main: #E5E7EB;
+            --text-muted: #9CA3AF;
+            --text-soft: #CBD5E1;
+            --accent-blue: #38BDF8;
+            --accent-green: #22C55E;
+            --accent-amber: #F59E0B;
+          }
+          .block-container {max-width: 1320px; padding-top: 0.75rem; padding-bottom: 1.4rem;}
+          h1, h2, h3 {letter-spacing: -0.015em;}
+          .subtitle {color: var(--text-muted); margin-top: -0.25rem; margin-bottom: 0.7rem; font-size: 0.98rem;}
+          .hero-card {
+            background: linear-gradient(135deg, var(--bg-panel) 0%, var(--bg-panel-soft) 100%);
+            border: 1px solid var(--line-soft);
+            border-radius: 16px;
+            padding: 15px 17px;
+            margin: 0.18rem 0 0.45rem 0;
+            box-shadow: 0 16px 40px rgba(2, 6, 23, 0.35);
+          }
+          .hero-title {font-size: 1.08rem; font-weight: 750; margin-bottom: 0.26rem; color: var(--text-main);}
+          .hero-text {color: var(--text-soft); font-size: 0.95rem; line-height: 1.45;}
+          .mission-strip {
+            margin: 0.4rem 0 0.7rem 0;
+            background: rgba(17, 24, 39, 0.82);
+            border: 1px solid var(--line-soft);
+            border-radius: 12px;
+            padding: 0.5rem 0.7rem;
+            color: var(--text-soft);
+            font-size: 0.86rem;
+          }
+          .section-shell {
+            margin: 0.72rem 0 1rem 0;
+            padding: 0.8rem 0.9rem 0.45rem 0.9rem;
+            border-radius: 14px;
+            border: 1px solid var(--line-soft);
+            background: linear-gradient(180deg, rgba(15,23,42,0.70) 0%, rgba(15,23,42,0.52) 100%);
+          }
+          .section-title {
+            font-weight: 720;
+            font-size: 1.03rem;
+            margin-bottom: 0.14rem;
+            color: var(--text-main);
+          }
+          .section-note {
+            color: var(--text-muted);
+            font-size: 0.84rem;
+            margin-bottom: 0.52rem;
+          }
+          .kpi-card {
+            border: 1px solid var(--line-soft);
+            border-radius: 12px;
+            background: linear-gradient(180deg, #0F172A 0%, #0D1525 100%);
+            padding: 0.58rem 0.7rem;
+            margin-bottom: 0.4rem;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+          }
+          .kpi-label {
+            color: var(--text-muted);
+            font-size: 0.78rem;
+            text-transform: uppercase;
+            letter-spacing: 0.035em;
+            margin-bottom: 0.18rem;
+          }
+          .kpi-value {
+            color: var(--text-main);
+            font-size: 1.3rem;
+            font-weight: 760;
+            line-height: 1.05;
+          }
+          .info-chip {
+            display:inline-block; padding:0.18rem 0.55rem; border-radius:999px;
+            background:#1F2937; color:var(--text-soft); border:1px solid #374151;
+            font-size:0.78rem; margin-right:0.35rem; margin-bottom:0.35rem;
+          }
+          .filter-hint {
+            color: var(--text-muted);
+            font-size: 0.81rem;
+            margin: 0.15rem 0 0.35rem 0;
+          }
+          .status-chip {
+            display:inline-block;
+            padding: 0.14rem 0.5rem;
+            border-radius: 999px;
+            border: 1px solid var(--line-strong);
+            background: rgba(2, 6, 23, 0.75);
+            color: var(--text-soft);
+            font-size: 0.75rem;
+            margin-bottom: 0.35rem;
+          }
+          .gate-row {
+            border: 1px solid var(--line-soft);
+            border-radius: 10px;
+            padding: 0.42rem 0.6rem;
+            margin: 0.26rem 0;
+            background: rgba(15, 23, 42, 0.65);
+          }
+          .panel-title {
+            font-size: 0.88rem;
+            font-weight: 670;
+            margin-bottom: 0.28rem;
+            color: var(--text-main);
+          }
+          [data-testid="stMetricValue"] {font-size: 1.7rem;}
+          [data-testid="stMetricLabel"] {font-weight: 600;}
+          [data-testid="stDataFrame"] {border-radius: 10px; border: 1px solid var(--line-soft);}
+        </style>
+        """,
+        unsafe_allow_html=True,
     )
 
 
-def verdict_badge(verdict: GateVerdict) -> str:
-    v = str(verdict).upper()
-    if v == "PASS":
-        return _badge(v, bg="#22C55E", fg="#062B12")  # green (strong)
-    if v == "CAUTION":
-        return _badge(v, bg="#F59E0B", fg="#2A1700")  # amber (strong)
-    if v == "FAIL":
-        return _badge(v, bg="#EF4444", fg="#2A0606")  # red (strong)
-    if v == "HOLD":
-        return _badge(v, bg="#F97316", fg="#2A1203")  # orange (strong)
-    if v == "PENDING":
-        return _badge(v, bg="#3B82F6", fg="#04142E")  # blue (strong)
-    return _badge(v, bg="#E5E7EB", fg="#111827")  # gray fallback
-
-
-def claim_badge(claim: ClaimValidity) -> str:
-    c = str(claim).upper()
-    if c == "CLEARED":
-        return _badge(c, bg="#22C55E", fg="#062B12")
-    if c == "FLAGGED":
-        return _badge(c, bg="#F59E0B", fg="#2A1700")
-    if c == "INVESTIGATED":
-        return _badge(c, bg="#F97316", fg="#2A1203")
-    if c == "CRITICAL":
-        return _badge(c, bg="#EF4444", fg="#2A0606")
-    return _badge(c, bg="#E5E7EB", fg="#111827")
-
-
-def _safe_ratio(amendment_value: float, original_value: float) -> float | None:
-    if original_value is None or original_value == 0:
-        return None
-    if amendment_value is None:
-        return None
-    return (float(amendment_value) / float(original_value)) - 1.0
-
-
-def _is_non_competitive(contract: pd.Series) -> bool:
-    raw = str(contract.get("solicitation_procedure_raw") or "").strip().upper()
-    label = str(contract.get("solicitation_procedure") or "").strip().lower()
-    return raw in {"TN", "AC"} or label in {"non-competitive", "non-concurrentielle"}
-
-
-def _is_competitive(contract: pd.Series) -> bool:
-    raw = str(contract.get("solicitation_procedure_raw") or "").strip().upper()
-    label = str(contract.get("solicitation_procedure") or "").strip().lower()
-    return raw in {"OB", "TC", "ST"} or label in {"competitive", "concurrentielle", "open bidding", "traditional competitive", "standing offer or supply arrangement"}
-
-
-@st.cache_data(show_spinner=False)
-def load_contracts() -> pd.DataFrame:
-    conn_str = (
-        os.environ.get("DB_CONNECTION_STRING")
-        or st.secrets.get("DB_CONNECTION_STRING", "")
-    ).strip()
-    if conn_str:
-        sql = SQL_PATH.read_text(encoding="utf-8").split(";")[0].strip()
-        with psycopg.connect(conn_str, sslmode="require") as conn:
-            with conn.cursor() as cur:
-                cur.execute(sql)
-                rows = cur.fetchall()
-                cols = [desc[0] for desc in cur.description]
-        df = pd.DataFrame(rows, columns=cols)
-        df["contract_or_agreement_date"] = pd.to_datetime(
-            df["contract_or_agreement_date"], errors="coerce"
-        ).dt.date
-        df = df.rename(
-            columns={
-                "contract_or_agreement_date": "contract_date",
-                "vendor": "vendor_name",
-            }
-        )
-        if "reference_number" not in df.columns:
-            # Canonical SQL output does not currently include reference_number.
-            # Use record_id as a stable surrogate for UI grouping/selection.
-            df["reference_number"] = df["record_id"]
-        if "description" not in df.columns:
-            df["description"] = "Not provided in canonical output."
-        return df
-
-    st.warning("DB_CONNECTION_STRING not set; using local CSV fallback data.")
-    df = pd.read_csv(DATA_PATH)
-    df["contract_date"] = pd.to_datetime(df["contract_date"], errors="coerce").dt.date
-    for col in ["original_value", "amendment_value", "current_value"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-    df["amendment_ratio"] = [
-        _safe_ratio(a, o) for a, o in zip(df["amendment_value"], df["original_value"])
-    ]
-    df = df.dropna(subset=["amendment_ratio", "original_value", "amendment_value"])
-    if "solicitation_procedure_raw" not in df.columns:
-        df["solicitation_procedure_raw"] = df["solicitation_procedure"]
-    return df
-
-
-def load_real_timeline(procurement_id: str) -> pd.DataFrame:
-    conn_str = (
-        os.environ.get("DB_CONNECTION_STRING")
-        or st.secrets.get("DB_CONNECTION_STRING", "")
-    ).strip()
-    if not conn_str or not procurement_id:
-        return pd.DataFrame()
-
-    sql = """
-    SELECT
-      reporting_period,
-      contract_date,
-      CASE WHEN TRIM(contract_value) ~ '^[0-9]+(\\.[0-9]+)?$'
-           THEN TRIM(contract_value)::numeric(15,2) END AS running_total,
-      CASE WHEN TRIM(amendment_value) ~ '^[0-9]+(\\.[0-9]+)?$'
-           THEN TRIM(amendment_value)::numeric(15,2) END AS amendment_added,
-      reference_number
-    FROM public.contracts
-    WHERE procurement_id = %s
-    ORDER BY reporting_period NULLS LAST, contract_date NULLS LAST
-    """
-    with psycopg.connect(conn_str, sslmode="require") as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, (procurement_id,))
-            rows = cur.fetchall()
-            cols = [desc[0] for desc in cur.description]
-    tl = pd.DataFrame(rows, columns=cols)
-    if tl.empty:
-        return tl
-    tl["date"] = pd.to_datetime(tl["contract_date"], errors="coerce")
-    tl["label"] = tl["reporting_period"].fillna("snapshot")
-    tl = tl.sort_values(["date", "reporting_period", "reference_number"], na_position="last").reset_index(drop=True)
-    tl["timeline_step"] = tl.index + 1
-    tl = tl.dropna(subset=["running_total"])
-    # Keep only value-changing points to make creep shape meaningful.
-    changed = (
-        tl["running_total"].ne(tl["running_total"].shift())
-        | tl["amendment_added"].fillna(0).ne(tl["amendment_added"].fillna(0).shift())
-    )
-    tl = tl.loc[changed | (tl.index == 0)].copy()
-    tl = tl.reset_index(drop=True)
-    tl["timeline_step"] = tl.index + 1
-
-    # Many snapshots share same day; apply small deterministic offsets for visual separation.
-    same_day_rank = tl.groupby("date").cumcount()
-    tl["effective_date"] = tl["date"] + pd.to_timedelta(same_day_rank, unit="D")
-    if tl["effective_date"].isna().any():
-        base = pd.Timestamp("2020-01-01")
-        idx_offsets = pd.to_timedelta(tl.index, unit="D")
-        tl.loc[tl["effective_date"].isna(), "effective_date"] = base + idx_offsets[tl["effective_date"].isna()]
-
-    tl["time_detail"] = (
-        "Step "
-        + tl["timeline_step"].astype(str)
-        + " | "
-        + tl["reporting_period"].fillna("unknown-period").astype(str)
-        + " | "
-        + tl["date"].dt.strftime("%Y-%m-%d").fillna("unknown-date")
-    )
-    return tl
-
-
-def format_currency(x: float | None) -> str:
-    if x is None or pd.isna(x):
-        return "—"
-    return f"${x:,.0f}"
-
-
-def format_ratio(r: float | None) -> str:
-    if r is None or pd.isna(r):
-        return "—"
-    return f"{r * 100:.1f}%"
-
-
-def classify_claim(contract: pd.Series) -> ClaimValidity:
-    ratio = float(contract["amendment_ratio"])
-    sole_source = _is_non_competitive(contract)
-    if ratio >= 1.0 and sole_source:
-        return "INVESTIGATED"
-    if ratio >= 3.0:
-        return "INVESTIGATED"
-    if ratio >= 0.25:
-        return "FLAGGED"
-    return "CLEARED"
-
-
-def synthesize_amendment_timeline(contract: pd.Series) -> list[dict]:
-    """
-    Dummy timeline for demo purposes.
-    - Competitive: 1 amendment step
-    - Non-competitive: 3 steps
-    """
-    d = contract.get("contract_date")
-    if isinstance(d, datetime):
-        d = d.date()
-    if not isinstance(d, date):
-        d = date(2024, 1, 1)
-
-    original = float(contract["original_value"])
-    amendment = float(contract["amendment_value"])
-    current = float(contract["current_value"])
-    if _is_non_competitive(contract):
-        steps = [0.35, 0.70, 1.00]
-        labels = ["Amendment A", "Amendment B", "Amendment C"]
-    else:
-        steps = [1.00]
-        labels = ["Amendment"]
-
-    timeline = []
-    for i, (p, label) in enumerate(zip(steps, labels)):
-        timeline.append(
-            {
-                "date": d + timedelta(days=30 * (i + 1)),
-                "label": label,
-                "amendment_added": amendment * p,
-                "running_total": original + amendment * p,
-            }
-        )
-
-    # Ensure last point matches the current_value if present; otherwise, original+amendment.
-    if timeline:
-        timeline[-1]["running_total"] = current if current else (original + amendment)
-    return timeline
-
-
-def evaluate_gates(contract: pd.Series, timeline: list[dict]) -> tuple[list[GateResult], ClaimValidity]:
-    required_fields = [
-        ("reference_number", "reference number"),
-        ("vendor_name", "vendor name"),
-        ("department", "department"),
-        ("original_value", "original value"),
-        ("amendment_value", "amendment value"),
-    ]
-    missing = [label for key, label in required_fields if not contract.get(key) or pd.isna(contract.get(key))]
-    ag01: GateResult
-    if missing:
-        ag01 = GateResult(
-            "AG-01 Evidence Provenance",
-            "FAIL",
-            "Missing required fields: " + ", ".join(missing) + ".",
-        )
-    else:
-        ag01 = GateResult(
-            "AG-01 Evidence Provenance",
-            "PASS",
-            "Traceable fields present (reference, vendor, department, values).",
-        )
-
-    vendor = str(contract.get("vendor_name") or "").strip()
-    bn = str(contract.get("bn") or "").strip()
-    if bn:
-        ag02 = GateResult("AG-02 Identity Resolution", "PASS", f"Vendor identity confirmed via Business Number {bn}.")
-    elif vendor and len(vendor) > 3:
-        ag02 = GateResult(
-            "AG-02 Identity Resolution",
-            "CAUTION",
-            f"Vendor name only; no BN available. PC-02: absent BN is a data quality condition. Identity partially resolved via name: {vendor}.",
-        )
-    else:
-        ag02 = GateResult("AG-02 Identity Resolution", "FAIL", "Vendor identity cannot be confirmed. No BN and insufficient name data.")
-
-    ratio = float(contract["amendment_ratio"])
-    sole_source = _is_non_competitive(contract)
-    is_competitive = _is_competitive(contract)
-
-    if ag01.verdict == "FAIL":
-        ag03 = GateResult(
-            "AG-03 Claim Strength (PRIMARY)",
-            "FAIL",
-            "AG-01 failed. Claim strength cannot be assessed without confirmed evidence provenance.",
-        )
-    elif ratio >= 3.0:
-        ag03 = GateResult(
-            "AG-03 Claim Strength (PRIMARY)",
-            "CAUTION",
-            f"Amendment ratio {(ratio * 100):.0f}% ({ratio:.2f}x original value). Pattern strength: STRONG. Classification capped at INVESTIGATED; CRITICAL requires external audit confirmation not available at Tier 3. PC-01: pattern is not verdict.",
-        )
-    elif ratio >= 1.0 and sole_source:
-        ag03 = GateResult(
-            "AG-03 Claim Strength (PRIMARY)",
-            "CAUTION",
-            f"Amendment ratio {(ratio * 100):.0f}% combined with non-competitive solicitation. Two corroborated signals: INVESTIGATED. External corroboration required before CRITICAL.",
-        )
-    elif ratio >= 1.0:
-        ag03 = GateResult(
-            "AG-03 Claim Strength (PRIMARY)",
-            "CAUTION",
-            f"Amendment ratio {(ratio * 100):.0f}% (original value doubled). Single signal: INVESTIGATED. Solicitation procedure: {contract.get('solicitation_procedure') or 'unknown'}.",
-        )
-    elif ratio >= 0.25:
-        ag03 = GateResult(
-            "AG-03 Claim Strength (PRIMARY)",
-            "PASS",
-            f"Amendment ratio {(ratio * 100):.0f}% exceeds PSPC CPN 2022-1 threshold (25%). Single pattern: FLAGGED. Structural explanation not yet ruled out per AG-06.",
-        )
-    else:
-        ag03 = GateResult(
-            "AG-03 Claim Strength (PRIMARY)",
-            "PASS",
-            f"Amendment ratio {(ratio * 100):.0f}% below flagging threshold. No claim warranted.",
-        )
-
-    ag04 = GateResult(
-        "AG-04 Harm Boundary",
-        "HOLD",
-        f"HOLD: reputational harm risk for named vendor {vendor} without external audit confirmation. AG-07 Escalation Authority not reachable at Tier 3. No consequential action permitted from this output.",
+def render_section_shell(title: str, note: str) -> None:
+    st.markdown(
+        (
+            "<div class='section-shell'>"
+            f"<div class='section-title'>{title}</div>"
+            f"<div class='section-note'>{note}</div>"
+            "</div>"
+        ),
+        unsafe_allow_html=True,
     )
 
-    d = contract.get("contract_date")
-    if not d or pd.isna(d):
-        ag05 = GateResult(
-            "AG-05 Temporal Window",
-            "CAUTION",
-            "Contract date unavailable. Cannot confirm pattern persists across lifecycle. PC-02: missing date is a data quality condition.",
-        )
-    else:
-        year = d.year if hasattr(d, "year") else datetime.fromisoformat(str(d)).year
-        age_years = 2026 - int(year)
-        if age_years >= 1:
-            ag05 = GateResult(
-                "AG-05 Temporal Window",
-                "PASS",
-                f"Contract dated {d} ({age_years} year{'s' if age_years > 1 else ''} old). Amendment pattern is not a same-day artifact. Temporal window: appropriate.",
-            )
-        else:
-            ag05 = GateResult(
-                "AG-05 Temporal Window",
-                "CAUTION",
-                f"Contract dated {d}. Recent contract; amendment pattern may reflect normal early-stage scope adjustment. Provisional finding only.",
-            )
 
-    if sole_source and ratio >= 1.0:
-        ag06 = GateResult(
-            "AG-06 Program / Policy Coherence",
-            "CAUTION",
-            f"Non-competitive solicitation with {(ratio * 100):.0f}% amendment growth. No competitive baseline existed at original award. Amendment compounds sole-source dependency. Structural explanation not ruled out but weakened by combined signals.",
-        )
-    elif is_competitive and ratio >= 1.0:
-        ag06 = GateResult(
-            "AG-06 Program / Policy Coherence",
-            "CAUTION",
-            f"Competitive solicitation at original award but amendment growth of {(ratio * 100):.0f}% may have quietly exceeded original competitive justification. PSPC CPN 2022-1: re-tendering may have been warranted. Structural explanation must be ruled out before escalation.",
-        )
-    else:
-        ag06 = GateResult(
-            "AG-06 Program / Policy Coherence",
-            "PASS",
-            f"Solicitation procedure: {contract.get('solicitation_procedure') or 'unknown'}. Amendment ratio: {(ratio * 100):.0f}%. Structural explanation not conclusively ruled out. Pattern remains at FLAGGED level.",
-        )
-
-    ag07 = GateResult(
-        "AG-07 Escalation Authority",
-        "PENDING",
-        "Not reached: AG-04 hold maintained. Tier 3 boundary active. No named escalation authority available at Agency 2026 sandbox level.",
-    )
-    ag08 = GateResult(
-        "AG-08 Audit Completeness",
-        "PASS",
-        "Flight Recorder chain active. All gate verdicts documented and replayable.",
-    )
-    ag09 = GateResult(
-        "AG-09 Public Defensibility",
-        "HOLD",
-        "Tier 3: internal analytic language only. Output not cleared for external publication or public-facing communication without AG-09 review.",
+def render_kpi_card(label: str, value: str) -> None:
+    st.markdown(
+        (
+            "<div class='kpi-card'>"
+            f"<div class='kpi-label'>{label}</div>"
+            f"<div class='kpi-value'>{value}</div>"
+            "</div>"
+        ),
+        unsafe_allow_html=True,
     )
 
-    gates = [ag01, ag02, ag03, ag04, ag05, ag06, ag07, ag08, ag09]
 
-    proposed: ClaimValidity = classify_claim(contract)
-    if proposed == "CRITICAL":
-        proposed = "INVESTIGATED"
-    if ag01.verdict == "FAIL":
-        proposed = "FLAGGED"
-    if ag03.verdict == "CAUTION" and proposed == "CLEARED":
-        proposed = "INVESTIGATED"
-    if proposed == "CLEARED" and ag06.verdict != "PASS":
-        proposed = "FLAGGED"
-    return gates, proposed
-
-
-def evidence_requirements_for(claim: ClaimValidity) -> list[str]:
-    if claim == "INVESTIGATED":
-        return [
-            "Procurement file / statement of work for original contract",
-            "Amendment documentation (scope changes + approvals)",
-            "Independent verification of vendor identity (BN / registry record)",
-            "Third-party context to rule out legitimate scope expansion",
-        ]
-    if claim == "CRITICAL":
-        return [
-            "External audit confirmation (required before consequential escalation)",
-            "Complete procurement file chain (original + all amendments)",
-            "Independent corroboration from official sources",
-        ]
-    if claim == "FLAGGED":
-        return [
-            "Basic contract record completeness check",
-            "Confirm thresholding logic and definitions used",
-        ]
-    return ["No additional evidence required (detector indicates low risk)."]
+def render_filter_hint() -> None:
+    st.markdown(
+        "<div class='filter-hint'>Need filters? Open the left panel using the top-left arrow.</div>",
+        unsafe_allow_html=True,
+    )
 
 
 def main() -> None:
-    st.set_page_config(page_title="Amendment Growth Tracker", layout="wide")
+    st.set_page_config(
+        page_title="Amendment Growth Tracker",
+        layout="wide",
+        initial_sidebar_state="collapsed",
+    )
+    apply_ui_theme()
+    _bridge_streamlit_secrets_to_environ()
 
-    st.title("Amendment Growth Tracker")
-    st.caption("Detection surfaces patterns. Governance determines what we are permitted to say about them.")
+    st.warning(
+        "You are viewing the legacy Streamlit page. For the new HTML/CSS dashboard with graphs, "
+        "run `python -m uvicorn monitor_site.server:app --reload --host 127.0.0.1 --port 8765` "
+        "and open http://127.0.0.1:8765."
+    )
+    st.title("Public Contract Change Monitor")
+    st.markdown(
+        "<div class='subtitle'>A plain-language tool for spotting unusually large contract changes and explaining what can (and cannot) be claimed from open data.</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "<div class='mission-strip'><b>Executive mission:</b> Surface high-growth amendment patterns quickly, then constrain interpretation through governance gates before any external claim.</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        """
+        <div class='hero-card'>
+          <div class='hero-title'>What this site does</div>
+          <div class='hero-text'>
+            This app reviews public federal contract records and highlights cases where amendment value grew substantially beyond the original award.
+            It does <b>not</b> decide wrongdoing. It classifies findings as:
+            <b>FLAGGED</b> (pattern needs monitoring) or <b>INVESTIGATED</b> (stronger corroborated signal requiring follow-up evidence).
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "<span class='info-chip'>Pattern detection only</span>"
+        "<span class='info-chip'>No misconduct verdicts</span>"
+        "<span class='info-chip'>Evidence-first governance gates</span>",
+        unsafe_allow_html=True,
+    )
+    render_filter_hint()
 
-    df = load_contracts()
+    with st.expander("How to read this dashboard", expanded=False):
+        st.write(
+            "- **Contracts scanned:** total records matching your current filters.\n"
+            "- **Ratio > 25% / 100% / 300%:** how large amendment growth is versus original value.\n"
+            "- **Ranked list:** contracts sorted from largest growth pattern to smallest.\n"
+            "- **Drill-down:** details for one selected contract and its timeline trend.\n"
+            "- **Governance card:** bounded statement of what the evidence supports right now."
+        )
+        st.write(
+            "Important: a high ratio is a **signal for review**, not proof of misconduct. "
+            "Legitimate scope expansion can also produce large amendments."
+        )
+
+    with st.spinner("Loading contract data from database..."):
+        df, load_src = load_contracts()
+
+    load_source = "Database" if load_src == "database" else "CSV fallback"
+    st.caption(f"Data source: {load_source} | Rows loaded: {len(df):,}")
 
     with st.sidebar:
         st.header("Filters")
@@ -454,7 +277,7 @@ def main() -> None:
         st.divider()
         st.subheader("Thresholds (dashboard)")
         t25 = st.checkbox("Show ratio > 25% (FLAGGED)", value=True, disabled=True)
-        _ = (t25,)  # keep UI anchored to spec
+        _ = (t25,)
 
     dff = df[df["original_value"] >= float(min_original)].copy()
     if department != "(all)":
@@ -462,16 +285,26 @@ def main() -> None:
     if procedure != "(all)":
         dff = dff[dff["solicitation_procedure"] == procedure]
 
-    # --- View 1: Dashboard ---
-    st.subheader("View 1 — Dashboard")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Contracts scanned", f"{len(dff):,}")
-    c2.metric("Ratio > 25%", f"{(dff['amendment_ratio'] > 0.25).sum():,}")
-    c3.metric("Ratio > 100%", f"{(dff['amendment_ratio'] > 1.0).sum():,}")
-    c4.metric("Ratio > 300%", f"{(dff['amendment_ratio'] > 3.0).sum():,}")
+    overview_df = df[df["original_value"] >= float(min_original)].copy()
+    if procedure != "(all)":
+        overview_df = overview_df[overview_df["solicitation_procedure"] == procedure]
+
+    render_section_shell(
+        "1) Executive Snapshot",
+        "Core signal coverage and threshold exposure for the currently scoped cohort.",
+    )
+    k1, k2, k3, k4 = st.columns(4)
+    with k1:
+        render_kpi_card("Contracts scanned", f"{len(dff):,}")
+    with k2:
+        render_kpi_card("Ratio > 25%", f"{(dff['amendment_ratio'] > 0.25).sum():,}")
+    with k3:
+        render_kpi_card("Ratio > 100%", f"{(dff['amendment_ratio'] > 1.0).sum():,}")
+    with k4:
+        render_kpi_card("Ratio > 300%", f"{(dff['amendment_ratio'] > 3.0).sum():,}")
 
     dept_rollup = (
-        dff.assign(flagged=dff["amendment_ratio"] > 0.25)
+        overview_df.assign(flagged=overview_df["amendment_ratio"] > 0.25)
         .groupby("department", as_index=False)
         .agg(
             contracts=("reference_number", "count"),
@@ -483,9 +316,13 @@ def main() -> None:
         .head(10)
     )
 
-    left, right = st.columns([1, 1])
+    left, right = st.columns([1.05, 1])
     with left:
         st.markdown("**Top departments by amendment activity**")
+        if department != "(all)":
+            st.caption(
+                "Department comparison stays broad for context; your department filter applies to ranked results and drill-down."
+            )
         st.dataframe(
             dept_rollup,
             use_container_width=True,
@@ -496,21 +333,41 @@ def main() -> None:
             },
         )
     with right:
-        chart = (
-            alt.Chart(dept_rollup)
-            .mark_bar()
-            .encode(
-                x=alt.X("flagged:Q", title="Flagged count (ratio > 25%)"),
-                y=alt.Y("department:N", sort="-x", title=None),
-                tooltip=["department", "contracts", "flagged", alt.Tooltip("avg_ratio:Q", format=".2f")],
+        with st.spinner("Rendering department chart..."):
+            st.altair_chart(
+                alt.Chart.from_dict(dept_flagged_chart_spec(dept_rollup)),
+                use_container_width=True,
             )
-            .properties(height=280)
-        )
-        st.altair_chart(chart, use_container_width=True)
 
-    # --- View 2: Ranked Contract List ---
-    st.subheader("View 2 — Ranked Contract List")
+    chart_left, chart_right = st.columns([1, 1])
+    with chart_left:
+        st.markdown("**Amendment ratio distribution**")
+        with st.spinner("Rendering ratio distribution..."):
+            st.altair_chart(
+                alt.Chart.from_dict(amendment_ratio_histogram_spec(overview_df)),
+                use_container_width=True,
+            )
+    with chart_right:
+        st.markdown("**Solicitation procedure mix**")
+        proc_rollup = (
+            overview_df.groupby("solicitation_procedure", as_index=False)
+            .agg(contracts=("reference_number", "count"))
+            .sort_values("contracts", ascending=False)
+            .head(10)
+        )
+        with st.spinner("Rendering solicitation mix..."):
+            st.altair_chart(
+                alt.Chart.from_dict(solicitation_procedure_chart_spec(proc_rollup)),
+                use_container_width=True,
+            )
+
+    render_section_shell(
+        "2) Ranked Contracts Workspace",
+        "Contracts are ranked by amendment ratio from highest to lowest to prioritize immediate review.",
+    )
     ranked = dff.sort_values("amendment_ratio", ascending=False).copy()
+    ranked["ratio_pct"] = ranked["amendment_ratio"] * 100
+    ranked["ratio_x"] = ranked["amendment_ratio"] + 1
     ranked_display = ranked[
         [
             "reference_number",
@@ -519,7 +376,8 @@ def main() -> None:
             "original_value",
             "amendment_value",
             "current_value",
-            "amendment_ratio",
+            "ratio_pct",
+            "ratio_x",
             "solicitation_procedure",
         ]
     ].copy()
@@ -536,7 +394,8 @@ def main() -> None:
             "original_value": st.column_config.NumberColumn(format="$%,.0f"),
             "amendment_value": st.column_config.NumberColumn(format="$%,.0f"),
             "current_value": st.column_config.NumberColumn(format="$%,.0f"),
-            "amendment_ratio": st.column_config.NumberColumn(format="%.3f"),
+            "ratio_pct": st.column_config.NumberColumn("amendment %", format="%.1f%%"),
+            "ratio_x": st.column_config.NumberColumn("growth multiple", format="%.2fx"),
         },
     )
 
@@ -548,11 +407,13 @@ def main() -> None:
     )
     contract = ranked[ranked["reference_number"] == selected_ref].iloc[0]
 
-    # --- View 3: Contract Drill-Down ---
-    st.subheader("View 3 — Contract Drill-Down")
+    render_section_shell(
+        "3) Contract Investigation",
+        "Focused review of one contract's profile, value progression, and timeline behavior.",
+    )
     a, b = st.columns([1.2, 1])
     with a:
-        st.markdown("**Contract details**")
+        st.markdown("<div class='panel-title'>Contract profile</div>", unsafe_allow_html=True)
         detail_rows = [
             ("Reference", contract["reference_number"]),
             ("Vendor", contract["vendor_name"]),
@@ -564,7 +425,7 @@ def main() -> None:
         for k, v in detail_rows:
             st.write(f"**{k}:** {v}")
     with b:
-        st.markdown("**Value summary**")
+        st.markdown("<div class='panel-title'>Value trajectory summary</div>", unsafe_allow_html=True)
         st.write(f"**Original:** {format_currency(contract['original_value'])}")
         st.write(f"**Amendments:** {format_currency(contract['amendment_value'])}")
         st.write(f"**Current:** {format_currency(contract['current_value'])}")
@@ -573,7 +434,8 @@ def main() -> None:
     timeline_df = pd.DataFrame()
     procurement_id = str(contract.get("procurement_id") or "").strip()
     if procurement_id:
-        timeline_df = load_real_timeline(procurement_id)
+        with st.spinner("Loading amendment timeline history..."):
+            timeline_df = load_real_timeline(procurement_id)
 
     if timeline_df.empty:
         timeline = synthesize_amendment_timeline(contract)
@@ -596,58 +458,60 @@ def main() -> None:
             timeline_df["running_total"] = pd.to_numeric(
                 timeline_df.get("running_total"), errors="coerce"
             )
-            st.markdown("**Amendment timeline (synthetic fallback)**")
+            st.markdown(
+                "<span class='status-chip'>Timeline source: Synthetic fallback</span>",
+                unsafe_allow_html=True,
+            )
     else:
-        st.markdown("**Amendment timeline (actual contract history)**")
+        st.markdown(
+            "<span class='status-chip'>Timeline source: Actual contract history</span>",
+            unsafe_allow_html=True,
+        )
 
     if not timeline_df.empty:
-        tl_chart = (
-            alt.Chart(timeline_df)
-            .mark_line(point=True)
-            .encode(
-                x=alt.X("effective_date:T", title="Timeline date"),
-                y=alt.Y("running_total:Q", title="Running contract value", axis=alt.Axis(format="$,.0f")),
-                tooltip=[
-                    "time_detail",
-                    "label",
-                    alt.Tooltip("running_total:Q", format="$,.0f"),
-                    alt.Tooltip("amendment_added:Q", format="$,.0f"),
-                ],
-            )
-            .properties(height=220)
-        )
-        st.altair_chart(tl_chart, use_container_width=True)
+        tl_spec = timeline_chart_spec(timeline_df)
+        if tl_spec:
+            with st.spinner("Rendering amendment timeline..."):
+                st.altair_chart(alt.Chart.from_dict(tl_spec), use_container_width=True)
 
-    # --- View 4: Governance Finding Card ---
-    st.subheader("View 4 — Governance Finding Card")
+    render_section_shell(
+        "4) Governance Decision Console",
+        "Gate-by-gate accountability checks that bound what can be said from the current evidence.",
+    )
     gates, claim = evaluate_gates(contract, [])
 
     card_left, card_right = st.columns([1.2, 1])
     with card_left:
-        st.markdown("**Gate verdicts (AG-01 → AG-09)**")
+        st.markdown("<div class='panel-title'>Gate verdicts (AG-01 to AG-09)</div>", unsafe_allow_html=True)
         for g in gates:
             st.markdown(
-                f"**{g.gate}:** {verdict_badge(g.verdict)} — {g.rationale}",
+                f"<div class='gate-row'><b>{g.gate}:</b> {verdict_badge(g.verdict)} - {g.rationale}</div>",
                 unsafe_allow_html=True,
             )
 
     with card_right:
-        st.markdown("**Governed output**")
+        st.markdown("<div class='panel-title'>Governed output</div>", unsafe_allow_html=True)
         st.markdown(
             f"**Claim validity:** {claim_badge(claim)}",
             unsafe_allow_html=True,
         )
-        st.markdown("**Evidence requirements for escalation**")
+        st.markdown("<div class='panel-title'>Evidence requirements for escalation</div>", unsafe_allow_html=True)
         for item in evidence_requirements_for(claim):
             st.write(f"- {item}")
-        st.markdown("**PC rule reminders**")
-        st.write("- **PC-01:** Pattern is not verdict.")
-        st.write("- **PC-03:** Claim strength must not exceed evidence strength.")
-        st.write("- **PC-05:** Every threshold must be documented (25% anchored to PSPC CPN 2022-1).")
-        st.write("- **PC-10:** Never use the word “fraud”.")
-        st.write("- **PC-12:** Never use raw SUM of agreement_value (not applicable in dummy mode).")
+        st.markdown("<div class='panel-title'>PC rule reminders</div>", unsafe_allow_html=True)
+        for rule in PC_RULE_REMINDERS:
+            idx = rule.find(":")
+            if idx > 0:
+                st.write(f"- **{rule[:idx]}:**{rule[idx + 1 :]}")
+            else:
+                st.write(f"- {rule}")
+
+    st.divider()
+    st.caption(
+        "Interpretation note: This tool supports triage and transparency analysis. "
+        "Final determinations require official procurement files, amendment documentation, and external verification."
+    )
 
 
 if __name__ == "__main__":
     main()
-

@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ProcureIntel</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400..700;1,9..40,400..700&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/css/styles.css?v=20260506-5" />
+    <script src="https://cdn.jsdelivr.net/npm/vega@5.30.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vega-lite@5.21.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vega-embed@6.26.0"></script>
+  </head>
+  <body>
+    <div class="top-accent" aria-hidden="true"></div>
+    <div class="page">
+      <div id="file-banner" class="banner banner-warn" hidden></div>
+      <div id="api-error" class="banner banner-error" hidden></div>
+
+      <header class="site-header">
+        <div class="site-header__badge">Agency 2026 · Amendment signals</div>
+        <h1>ProcureIntel</h1>
+        <p class="subtitle">
+          A modern investigation workspace for spotting unusual public-contract changes, then explaining the evidence
+          clearly before anyone overstates a claim.
+        </p>
+        <div class="mission-strip">
+          <strong>Executive mission:</strong> turn messy procurement records into ranked signals, explainable evidence,
+          and governance-safe findings.
+        </div>
+        <div class="hero-card">
+          <div class="hero-title">What this site does</div>
+          <div class="hero-text">
+            This app reviews public federal contract records and highlights cases where amendment value grew substantially
+            beyond the original award. It does <strong>not</strong> decide wrongdoing. It classifies findings as:
+            <strong>FLAGGED</strong> (pattern needs monitoring) or <strong>INVESTIGATED</strong> (stronger corroborated signal
+            requiring follow-up evidence).
+          </div>
+        </div>
+        <div class="hero-highlights" aria-label="Platform highlights">
+          <div>
+            <span>01</span>
+            Ranked amendment-growth signals
+          </div>
+          <div>
+            <span>02</span>
+            Live DB or CSV fallback
+          </div>
+          <div>
+            <span>03</span>
+            AG-01 to AG-09 governance checks
+          </div>
+        </div>
+        <p>
+          <span class="info-chip">Pattern detection only</span>
+          <span class="info-chip">No misconduct verdicts</span>
+          <span class="info-chip">Evidence-first governance gates</span>
+        </p>
+        <p class="filter-hint">Use the left panel to filter contracts. Charts in section 1 use a broad department cohort when a department filter is on (same as the Streamlit dashboard).</p>
+        <details class="readme">
+          <summary>How to read this dashboard</summary>
+          <p>
+            <strong>Contracts scanned:</strong> total records matching your current filters.<br />
+            <strong>Ratio &gt; 25% / 100% / 300%:</strong> how large amendment growth is versus original value.<br />
+            <strong>Ranked list:</strong> contracts sorted from largest growth pattern to smallest.<br />
+            <strong>Drill-down:</strong> details for one selected contract and its timeline trend.<br />
+            <strong>Governance card:</strong> bounded statement of what the evidence supports right now.
+          </p>
+          <p>
+            Important: a high ratio is a <strong>signal for review</strong>, not proof of misconduct. Legitimate scope
+            expansion can also produce large amendments.
+          </p>
+        </details>
+      </header>
+
+      <div class="status-row" id="status-row" hidden>
+        <span class="pill" id="pill-source">Source</span>
+        <span class="pill" id="pill-rows">Rows</span>
+      </div>
+      <p class="meta-caption" id="data-caption">Loading…</p>
+
+      <div class="layout">
+        <aside class="sidebar" aria-label="Filters">
+          <h2>Filters</h2>
+          <div class="field">
+            <label for="min-original">Min original value</label>
+            <input type="number" id="min-original" min="0" step="1000" value="10000" />
+            <small>If the ranked table is empty, lower this or reset filters to (all).</small>
+          </div>
+          <div class="field">
+            <label for="filter-department">Department</label>
+            <select id="filter-department"></select>
+          </div>
+          <div class="field">
+            <label for="filter-procedure">Solicitation procedure</label>
+            <select id="filter-procedure"></select>
+          </div>
+          <div class="divider"></div>
+          <h2>Thresholds</h2>
+          <p class="filter-hint">Show ratio &gt; 25% (FLAGGED) — anchored to PSPC CPN 2022-1 (fixed in logic).</p>
+        </aside>
+
+        <main>
+          <section class="section-shell" aria-labelledby="sec1">
+            <h2 class="section-title" id="sec1">1) Executive Snapshot</h2>
+            <p class="section-note">Core signal coverage and threshold exposure for the currently scoped cohort.</p>
+            <div class="kpi-row">
+              <div class="kpi-card">
+                <div class="kpi-label">Contracts scanned</div>
+                <div class="kpi-value" id="kpi-scanned">—</div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-label">Ratio &gt; 25%</div>
+                <div class="kpi-value" id="kpi-25">—</div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-label">Ratio &gt; 100%</div>
+                <div class="kpi-value" id="kpi-100">—</div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-label">Ratio &gt; 300%</div>
+                <div class="kpi-value" id="kpi-300">—</div>
+              </div>
+            </div>
+
+            <p class="filter-hint" id="dept-context-note" hidden>
+              Department comparison stays broad for context; your department filter applies to ranked results and drill-down.
+            </p>
+
+            <div class="two-col">
+              <div>
+                <h2>Top departments by amendment activity</h2>
+                <div class="data-table-wrap">
+                  <table class="data-table" id="dept-table">
+                    <thead>
+                      <tr>
+                        <th>Department</th>
+                        <th class="num">Contracts</th>
+                        <th class="num">Flagged</th>
+                        <th class="num">Avg ratio</th>
+                        <th class="num">Max ratio</th>
+                      </tr>
+                    </thead>
+                    <tbody></tbody>
+                  </table>
+                </div>
+              </div>
+              <div>
+                <h2>Flagged count by department</h2>
+                <div class="chart-box" id="chart-dept"></div>
+              </div>
+            </div>
+
+            <div class="two-col">
+              <div>
+                <h2>Amendment ratio distribution</h2>
+                <div class="chart-box compact" id="chart-hist"></div>
+              </div>
+              <div>
+                <h2>Solicitation procedure mix</h2>
+                <div class="chart-box compact" id="chart-proc"></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="section-shell" aria-labelledby="sec2">
+            <h2 class="section-title" id="sec2">2) Ranked Contracts Workspace</h2>
+            <p class="section-note">Contracts are ranked by amendment ratio from highest to lowest to prioritize immediate review.</p>
+            <div id="empty-ranked" class="warn-banner" hidden>No contracts match the current filter set. Adjust filters to continue.</div>
+            <div class="data-table-wrap" id="ranked-wrap">
+              <table class="data-table" id="ranked-table">
+                <thead>
+                  <tr>
+                    <th>Reference</th>
+                    <th>Vendor</th>
+                    <th>Department</th>
+                    <th class="num">Original</th>
+                    <th class="num">Amendments</th>
+                    <th class="num">Current</th>
+                    <th class="num">Amendment %</th>
+                    <th class="num">Growth multiple</th>
+                    <th>Procedure</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <div class="contract-select-wrap">
+              <label for="contract-select">Select a contract to drill down</label>
+              <select id="contract-select"></select>
+            </div>
+          </section>
+
+          <section class="section-shell" aria-labelledby="sec3">
+            <h2 class="section-title" id="sec3">3) Contract Investigation</h2>
+            <p class="section-note">Focused review of one contract's profile, value progression, and timeline behavior.</p>
+            <div class="two-col">
+              <div>
+                <div class="panel-title">Contract profile</div>
+                <ul class="profile-list" id="profile-list"></ul>
+              </div>
+              <div>
+                <div class="panel-title">Value trajectory summary</div>
+                <ul class="profile-list" id="value-summary"></ul>
+              </div>
+            </div>
+            <p id="timeline-chip" class="status-chip"></p>
+            <div class="chart-box compact" id="chart-timeline"></div>
+          </section>
+
+          <section class="section-shell" aria-labelledby="sec4">
+            <h2 class="section-title" id="sec4">4) Governance Decision Console</h2>
+            <p class="section-note">Gate-by-gate accountability checks that bound what can be said from the current evidence.</p>
+            <div class="governance-grid">
+              <div>
+                <div class="panel-title">Gate verdicts (AG-01 to AG-09)</div>
+                <div id="gate-list"></div>
+              </div>
+              <div>
+                <div class="panel-title">Governed output</div>
+                <p id="claim-line"></p>
+                <div class="panel-title">Evidence requirements for escalation</div>
+                <ul class="profile-list" id="evidence-list"></ul>
+                <div class="panel-title">PC rule reminders</div>
+                <ul class="profile-list" id="pc-rules"></ul>
+              </div>
+            </div>
+          </section>
+
+          <p class="caption-foot">
+            Interpretation note: This tool supports triage and transparency analysis. Final determinations require official
+            procurement files, amendment documentation, and external verification.
+          </p>
+        </main>
+      </div>
+    </div>
+
+    <script src="/static/js/app.js?v=20260506-4"></script>
+  </body>
+</html>

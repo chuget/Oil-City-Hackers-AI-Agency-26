@@ -29,6 +29,7 @@ Verified locally on April 29, 2026:
 
 - Next.js API runs locally on `http://127.0.0.1:3000`
 - Streamlit dashboard runs locally on `http://127.0.0.1:8501`
+- FastAPI HTML dashboard runs locally on `http://127.0.0.1:8765` (see below)
 - Live database connection works
 - `/api/cases` returns live ranked cases
 - `/api/govern` returns full governed findings
@@ -266,6 +267,38 @@ Data behavior:
 
 - Primary: live Postgres query from `dev1-sql/DEV1_CANONICAL_SQL_CONTRACT.sql`
 - Fallback: `data/contracts.csv` when `DB_CONNECTION_STRING` is not set
+
+---
+
+## Run the HTML dashboard (FastAPI)
+
+This is the same **Public Contract Change Monitor** logic as `app.py`, served as static HTML/CSS with Vega-Lite charts and a small amount of JavaScript. It uses `monitor_core.py`, `monitor_charts.py`, and `monitor_dashboard.py` (shared with Streamlit).
+
+From the repository root that contains `app.py`:
+
+```powershell
+cd "...\Oil-City-Hackers-AI-Agency-26"
+python -m pip install -r requirements.txt
+copy .env.example .env
+# edit .env if you use Postgres
+python -m uvicorn monitor_site.server:app --reload --host 127.0.0.1 --port 8765
+```
+
+Open:
+
+```text
+http://127.0.0.1:8765
+```
+
+Endpoints:
+
+- `GET /` — dashboard UI (static assets under `/static/`)
+- `GET /api/bootstrap` — filter option lists and row counts
+- `GET /api/dashboard` — query params: `min_original`, `department`, `procedure`, `selected_ref` (optional)
+
+The FastAPI app reads **`DB_CONNECTION_STRING`** or **`DATABASE_URL`** from the environment (plus optional **`PGSSLMODE`**, default **`prefer`**, which fixes many local Postgres setups that fail with strict TLS). It also loads `web/.env` if present (same folder as the Next.js app). Copy values from `.streamlit/secrets.toml` into `.env` at the repo root, or export them before `uvicorn`, if you used Streamlit secrets before.
+
+Smoke-check the data layer: `GET http://127.0.0.1:8765/api/health` should return `ok`, `load_source`, and `rows_loaded`.
 
 ---
 

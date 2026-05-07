@@ -2,3 +2,6 @@ streamlit
 pandas
 altair
 psycopg[binary]
+fastapi
+uvicorn[standard]
+python-dotenv

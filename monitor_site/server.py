@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Query
+from fastapi import Body, FastAPI, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -24,7 +24,9 @@ load_dotenv(ROOT / ".env")
 load_dotenv(ROOT / "web" / ".env", override=False)
 os.chdir(ROOT)
 
+from monitor_chat import answer_question, chat_config_present
 from monitor_dashboard import build_dashboard_payload
+from monitor_data_platform import get_data_census, list_lanes
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -41,18 +43,21 @@ async def no_cache_for_dashboard_assets(request, call_next):
 
 @app.get("/api/health")
 def api_health() -> dict:
-    """Lightweight check: can we load contract rows (DB or CSV)?"""
+    """Lightweight check: database connectivity and warehouse census."""
     try:
-        from monitor_core import db_config_present, load_contracts
+        from monitor_core import db_config_present
 
-        df, src = load_contracts()
+        census = get_data_census()
         return {
-            "ok": True,
-            "load_source": src,
-            "rows_loaded": int(len(df)),
+            "ok": census.get("ok", False),
+            "load_source": "database" if db_config_present() else "none",
+            "rows_loaded": census.get("total_estimate", 0),
+            "warehouse_total_estimate": census.get("total_estimate", 0),
+            "schema_totals": census.get("schema_totals", {}),
             "database_config_present": db_config_present(),
             "database_env_names_checked": ["DB_CONNECTION_STRING", "DATABASE_URL"],
             "env_files_checked": [str(ROOT / ".env"), str(ROOT / "web" / ".env")],
+            "lanes": census.get("lanes", []),
         }
     except Exception as e:
         return JSONResponse(
@@ -66,10 +71,21 @@ def api_health() -> dict:
         )
 
 
+@app.get("/api/data/census")
+def api_data_census() -> dict:
+    return jsonable_encoder(get_data_census())
+
+
+@app.get("/api/data/lanes")
+def api_data_lanes() -> dict:
+    census = get_data_census()
+    return jsonable_encoder({"lanes": census.get("lanes") or list_lanes()})
+
+
 @app.get("/api/bootstrap")
 def api_bootstrap() -> dict:
     try:
-        payload = build_dashboard_payload(10_000.0, "(all)", "(all)", None)
+        payload = build_dashboard_payload(10_000.0, "(all)", "(all)", None, "contracts")
     except Exception as e:
         return JSONResponse(
             status_code=503,
@@ -97,9 +113,10 @@ def api_dashboard(
     department: str = Query("(all)"),
     procedure: str = Query("(all)"),
     selected_ref: str | None = Query(None),
+    dataset: str = Query("contracts"),
 ):
     try:
-        payload = build_dashboard_payload(min_original, department, procedure, selected_ref)
+        payload = build_dashboard_payload(min_original, department, procedure, selected_ref, dataset)
         return jsonable_encoder(payload)
     except Exception as e:
         return JSONResponse(
@@ -112,6 +129,46 @@ def api_dashboard(
                 "rows_loaded": 0,
             },
         )
+
+
+@app.get("/api/chat/status")
+def api_chat_status() -> dict:
+    return {"enabled": chat_config_present()}
+
+
+@app.post("/api/chat")
+def api_chat(payload: dict = Body(...)):
+    messages = payload.get("messages") or []
+    if not isinstance(messages, list):
+        return JSONResponse(status_code=400, content={"ok": False, "error": "messages must be a list"})
+    filters = payload.get("filters") or {}
+    try:
+        min_original = float(filters.get("min_original", 10_000.0))
+    except Exception:
+        min_original = 10_000.0
+    department = str(filters.get("department") or "(all)")
+    procedure = str(filters.get("procedure") or "(all)")
+    dataset = str(filters.get("dataset") or "contracts")
+
+    try:
+        result = answer_question(
+            messages,
+            min_original=min_original,
+            department=department,
+            procedure=procedure,
+            dataset=dataset,
+        )
+    except Exception as e:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "ok": False,
+                "error": f"Chat failed while preparing data: {e}",
+            },
+        )
+    if not result.get("ok"):
+        return JSONResponse(status_code=503, content=result)
+    return result
 
 
 @app.get("/")

@@ -27,9 +27,9 @@ Governance answers: **what are we allowed to say about it, and what evidence is 
 
 Verified locally on April 29, 2026:
 
+- **ProcureIntel HTML dashboard (primary)** runs locally on `http://127.0.0.1:8765` (see [Run ProcureIntel](#run-procureintel-primary-dashboard))
 - Next.js API runs locally on `http://127.0.0.1:3000`
-- Streamlit dashboard runs locally on `http://127.0.0.1:8501`
-- FastAPI HTML dashboard runs locally on `http://127.0.0.1:8765` (see below)
+- Streamlit dashboard (legacy, optional) runs locally on `http://127.0.0.1:8501`
 - Live database connection works
 - `/api/cases` returns live ranked cases
 - `/api/govern` returns full governed findings
@@ -79,10 +79,11 @@ GovernedFinding
 Dashboard / demo interface
 ```
 
-There are two demo surfaces:
+There are three demo surfaces (all non-destructive; shared Python logic where noted):
 
-- **Next.js API app** under `web/`
-- **Streamlit dashboard** at repo root in `app.py`
+- **ProcureIntel HTML dashboard (primary)** under `monitor_site/`: FastAPI + HTML/CSS/JS, shares `monitor_core.py` with Streamlit
+- **Next.js API app** under `web/`: governance API, Bedrock explain, S3 export, Amplify deployment
+- **Streamlit dashboard (legacy)** at repo root in `app.py`: kept as fallback; shows a banner pointing to ProcureIntel
 
 ---
 
@@ -202,17 +203,107 @@ CASE_EXPORT_BUCKET=<s3 bucket name>
 - `alberta`: live Alberta candidate query
 - `federal`: legacy federal/public contracts path
 
-The Streamlit app expects:
+The ProcureIntel HTML dashboard connects to the **Agency 2026 unified Postgres warehouse** (~23M rows across CRA, FED, AB, and `general` entity matching). See the [GovAlta/agency-26-hackathon](https://github.com/GovAlta/agency-26-hackathon) repo for schema docs and `KNOWN-DATA-ISSUES.md`.
 
 ```text
-DB_CONNECTION_STRING=<postgres connection string>
+DB_CONNECTION_STRING=<postgres connection string from hackathon organizers>
+# or
+DATABASE_URL=<same>
+PGSSLMODE=prefer
+GROQ_API_KEY=<optional, enables Ask ProcureIntel chatbot>
 ```
 
-If using the downloaded env file, map:
+ProcureIntel **never loads full tables into memory**. It runs SQL aggregations per data lane and returns top-N ranked rows only.
+
+Copy `.env.example` to `.env` at the repo root. Do not commit real database credentials.
+
+---
+
+## Run ProcureIntel (Primary Dashboard)
+
+This is the recommended **Public Contract Change Monitor** interface: static HTML/CSS with Vega-Lite charts, governance console, multi-lane warehouse access, and optional Groq chatbot. It uses `monitor_data_platform.py`, `monitor_dashboard.py`, `monitor_charts.py`, and `monitor_core.py` (shared with Streamlit).
+
+From the repository root that contains `app.py`:
+
+```bash
+cd Oil-City-Hackers-AI-Agency-26
+python3 -m pip install -r requirements.txt
+cp .env.example .env   # edit .env if you use Postgres
+python3 -m uvicorn monitor_site.server:app --reload --host 127.0.0.1 --port 8765
+```
+
+Open:
 
 ```text
-DB_CONNECTION_STRING = DATABASE_URL
+http://127.0.0.1:8765
 ```
+
+Endpoints:
+
+- `GET /`: dashboard UI (static assets under `/static/`)
+- `GET /api/health`: warehouse connectivity and row estimates
+- `GET /api/data/census`: per-schema row estimates (~23M total) and lane availability
+- `GET /api/data/lanes`: data lane catalog (contracts, fed, ab, cra, entities)
+- `GET /api/bootstrap`: filter option lists for the default contracts lane
+- `GET /api/dashboard`: query params `dataset`, `min_original`, `department`, `procedure`, `selected_ref` (optional)
+- `GET /api/chat/status`: whether the Groq chatbot is enabled (`{"enabled": true|false}`)
+- `POST /api/chat`: Groq-backed Q&A over the active lane (see "Ask ProcureIntel" below)
+
+**Data lanes** (`dataset` query param):
+
+| Lane | Source | What it measures |
+|------|--------|------------------|
+| `contracts` | `public.contracts` | Federal amendment creep (~27K filtered candidates) |
+| `fed` | `fed.vw_agreement_current` vs originals | Grant agreement growth (1.3M agreements, safe views) |
+| `ab` | `ab.ab_sole_source` + `ab.ab_contracts` | Alberta non-competitive growth proxy |
+| `cra` | `cra.govt_funding_by_charity` | Charity government funding intensity |
+| `entities` | `general.vw_entity_funding` | Cross-dataset linked organizations |
+
+The FastAPI app reads **`DB_CONNECTION_STRING`** or **`DATABASE_URL`** from the environment (plus optional **`PGSSLMODE`**, default **`prefer`**). It also loads `web/.env` if present.
+
+Smoke checks:
+
+```text
+http://127.0.0.1:8765/api/health
+http://127.0.0.1:8765/api/bootstrap
+http://127.0.0.1:8765/api/dashboard?min_original=10000
+```
+
+Data behavior:
+
+- Primary: SQL aggregations against the Agency 2026 warehouse (top 500 ranked rows per request)
+- The **contracts** lane matches the Challenge 4 amendment-creep cohort (~27K rows after filters), not the full 23M table
+- Other lanes surface federal grants, Alberta sole-source patterns, CRA funding, and cross-linked entities
+- Without a DB URL, the dashboard cannot query the warehouse (a small `data/contracts.csv` sample exists for legacy Streamlit only)
+
+### Ask ProcureIntel (Groq chatbot)
+
+The dashboard includes an optional natural-language assistant. When a `GROQ_API_KEY` is configured, an **Ask ProcureIntel** button appears in the bottom-right of the dashboard. Users can ask questions like:
+
+- *Which departments have the most flagged contracts?*
+- *Summarize the top 5 highest amendment-ratio contracts.*
+- *What is the median amendment ratio in the current scope?*
+
+How it works:
+
+1. Each request takes the current filters (`dataset`, `min_original`, `department`, `procedure`) and a SQL-backed summary of that lane.
+2. The server builds a compact summary of the in-scope dataset (KPIs, top departments, top contracts by amendment ratio).
+3. That summary is injected as a system prompt into a Groq chat completion. The model is instructed to answer **only** from the provided context, avoid accusatory language, and never use the word "fraud".
+
+Setup:
+
+1. Create a free API key at <https://console.groq.com>.
+2. Add it to `.env` at the repo root:
+
+   ```text
+   GROQ_API_KEY=gsk_...
+   # Optional override; defaults to llama-3.1-8b-instant
+   GROQ_MODEL=llama-3.1-8b-instant
+   ```
+
+   If chat fails with `SSL: CERTIFICATE_VERIFY_FAILED` (common on macOS Python), run `pip install -r requirements.txt` so `certifi` is installed; the server uses it for Groq HTTPS. You can also set `SSL_CERT_FILE` to a PEM bundle, or as a last resort only `GROQ_SSL_VERIFY=0` (disables TLS verification).
+
+3. Restart `uvicorn`. The chat button will only appear when the key is present.
 
 ---
 
@@ -246,7 +337,9 @@ Build check:
 
 ---
 
-## Run The Streamlit Dashboard
+## Run The Streamlit Dashboard (Legacy / Optional)
+
+The Streamlit app remains available as a fallback. It shares the same Python data layer as ProcureIntel and displays a banner pointing users to the HTML dashboard.
 
 Use a Python runtime with `streamlit`, `pandas`, `altair`, and `psycopg`.
 
@@ -270,38 +363,6 @@ Data behavior:
 
 ---
 
-## Run the HTML dashboard (FastAPI)
-
-This is the same **Public Contract Change Monitor** logic as `app.py`, served as static HTML/CSS with Vega-Lite charts and a small amount of JavaScript. It uses `monitor_core.py`, `monitor_charts.py`, and `monitor_dashboard.py` (shared with Streamlit).
-
-From the repository root that contains `app.py`:
-
-```powershell
-cd "...\Oil-City-Hackers-AI-Agency-26"
-python -m pip install -r requirements.txt
-copy .env.example .env
-# edit .env if you use Postgres
-python -m uvicorn monitor_site.server:app --reload --host 127.0.0.1 --port 8765
-```
-
-Open:
-
-```text
-http://127.0.0.1:8765
-```
-
-Endpoints:
-
-- `GET /` — dashboard UI (static assets under `/static/`)
-- `GET /api/bootstrap` — filter option lists and row counts
-- `GET /api/dashboard` — query params: `min_original`, `department`, `procedure`, `selected_ref` (optional)
-
-The FastAPI app reads **`DB_CONNECTION_STRING`** or **`DATABASE_URL`** from the environment (plus optional **`PGSSLMODE`**, default **`prefer`**, which fixes many local Postgres setups that fail with strict TLS). It also loads `web/.env` if present (same folder as the Next.js app). Copy values from `.streamlit/secrets.toml` into `.env` at the repo root, or export them before `uvicorn`, if you used Streamlit secrets before.
-
-Smoke-check the data layer: `GET http://127.0.0.1:8765/api/health` should return `ok`, `load_source`, and `rows_loaded`.
-
----
-
 ## API Reference
 
 | Method | Endpoint | Purpose |
@@ -317,6 +378,21 @@ Smoke-check the data layer: `GET http://127.0.0.1:8765/api/health` should return
 ---
 
 ## Deployment Notes
+
+### ProcureIntel (monitor_site)
+
+Deploy the HTML dashboard independently from the Next.js Amplify app. A Dockerfile and Render blueprint are included at the repo root.
+
+**Docker (local or any host):**
+
+```bash
+docker build -t procureintel .
+docker run -p 8765:8765 --env-file .env procureintel
+```
+
+**Render:** connect the repo and use `render.yaml` (Docker web service on port 8765). Set `DATABASE_URL`, `GROQ_API_KEY`, and other env vars in the Render dashboard.
+
+This does not affect the existing Amplify deployment of `web/`.
 
 ### AWS Amplify
 
@@ -350,7 +426,7 @@ Add environment variables in the Vercel project settings. Do not paste real secr
 
 ## Demo Flow
 
-1. Open the dashboard or API landing page.
+1. Open ProcureIntel at `http://127.0.0.1:8765` (or the Next.js API landing page at `:3000`).
 2. Show `/api/health`: database connected, dataset configured.
 3. Show `/api/cases`: ranked amendment or follow-on candidates.
 4. Select one high-ratio case.

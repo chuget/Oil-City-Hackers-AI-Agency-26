@@ -1,72 +1,39 @@
-# Agency 2026 – Top 3 One-Day Hackathon Builds
+# Agency 2026: challenge picks for a one-day build
 
-## Ranking Criteria
-- High signal with likely available data
-- Buildable in one day by a small team
-- Easy to demo clearly to judges
-- Strong public-sector accountability story
-- Lower dependency on hard-to-access external data
+Internal notes from early planning. We chose **Sole Source and Amendment Creep** for the hackathon.
 
-## 1. Sole Source and Amendment Creep
-**Why it ranks #1:**
-- Contract and amendment data is usually structured enough to analyze quickly
-- The problem is intuitive for judges: small contract becomes large through amendments
-- Easy to demo with before/after contract timelines and a ranked dashboard
-- Strong accountability narrative without needing perfect ML
+## How we ranked options
 
-**Best build angle:**
-Start with **Amendment Growth Tracker** and optionally add **Threshold Split Detector** if time allows.
+- Data had to exist in the warehouse and be queryable in a day
+- Demo had to be explainable in under five minutes
+- Logic could be mostly SQL and rules, not a custom ML pipeline
 
-**Why it’s hackathon-friendly:**
-- Mostly deterministic analytics
-- Clear visual output
-- Doesn’t require heavy entity resolution to be useful
+## Our top three
 
-## 2. Vendor Concentration
-**Why it ranks #2:**
-- Straightforward aggregation problem with strong visuals
-- Easy to explain: “government is overly dependent on a few vendors here”
-- Good demo potential with HHI/top-share charts and dependency scenarios
-- Can be valuable even with partial procurement data
+### 1. Sole Source and Amendment Creep (what we built)
 
-**Best build angle:**
-Start with **Concentration Index Dashboard** and add a lightweight **Dependency Shock Simulator** for demo flair.
+- Contract and amendment fields are structured in `public.contracts`
+- Judges understand “small award, large amendments” quickly
+- Ranked table + one contract drill-down is enough for a demo
+- Governance gates give a clear story beyond charts
 
-**Why it’s hackathon-friendly:**
-- Fast path from raw contract data to useful insight
-- Minimal need for complex matching
-- Judges can understand it in seconds
+### 2. Vendor Concentration
 
-## 3. Zombie Recipients
-**Why it ranks #3:**
-- Strong narrative payoff: “public money went to entities that disappeared”
-- Great accountability framing
-- More ambitious than #1 and #2, but still feasible if entity matching is decent
-- Timeline-based storytelling makes for a memorable demo
+- Mostly group-bys and charts (HHI, top vendors by department)
+- Useful even with partial data
+- Less unique than amendment creep for this event
 
-**Best build angle:**
-Start with **Shutdown Risk Timeline Detector** and use simple rule-based scoring rather than a full predictive model.
+### 3. Zombie Recipients
 
-**Why it’s hackathon-friendly:**
-- Powerful story with relatively simple output
-- Good candidate for combining structured data + evidence cards
-- Harder than procurement challenges, but still very compelling
+- Strong headline (“money went to entities that shut down”)
+- Needs better entity matching; riskier in 24 hours
 
-## Honorable Mentions
-### Funding Loops
-Very interesting and visually strong, but graph interpretation can get subtle fast. Great if the team has graph/data science strength.
+## Passed for now
 
-### Adverse Media
-Very demo-friendly, but quality depends heavily on article access, entity resolution, and false-positive control.
+- **Funding Loops:** interesting graphs, harder to explain fast
+- **Adverse Media:** depends on news APIs and false-positive control
+- **Duplicative Funding:** cross-program matching is messy on a short clock
 
-### Duplicative Funding
-Potentially strong, but cross-government matching may become messy in a one-day window.
+## Bottom line
 
-## Recommended Strategy
-If the goal is **best chance of a polished, credible one-day demo**, I’d recommend:
-1. **Sole Source and Amendment Creep**
-2. **Vendor Concentration**
-3. **Zombie Recipients**
-
-If you want the safest path, pick **Sole Source and Amendment Creep**.
-If you want the most emotionally compelling story, pick **Zombie Recipients**.
+Stick with **Amendment Creep** for a reliable demo. Consider **Vendor Concentration** as a stretch chart. **Zombie Recipients** only if entity resolution is already working.

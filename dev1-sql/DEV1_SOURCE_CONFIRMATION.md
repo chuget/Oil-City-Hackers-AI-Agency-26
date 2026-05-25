@@ -43,4 +43,4 @@ Row counts observed during verification:
 
 - If fallback to Alberta is needed, phrase findings as "sole-source follow-on risk" and not amendment lineage.
 - Keep one frontend contract output schema regardless of lane to avoid UI branching.
-- Use robust numeric parsing and explicit ratio semantics in SQL artifacts to keep threshold buckets meaningful.
+- Use strict numeric parsing and explicit ratio semantics in SQL artifacts to keep threshold buckets meaningful.

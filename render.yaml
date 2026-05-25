@@ -1,0 +1,20 @@
+# Render blueprint for ProcureIntel (monitor_site).
+# Deploy alongside the Amplify-hosted Next.js app in web/ — does not replace it.
+services:
+  - type: web
+    name: procureintel
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: DB_CONNECTION_STRING
+        sync: false
+      - key: PGSSLMODE
+        value: prefer
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: llama-3.1-8b-instant

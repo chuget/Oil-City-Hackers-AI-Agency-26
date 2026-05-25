@@ -1,0 +1,11 @@
+.venv/
+.venv-monitor/
+.venv-monitor2/
+__pycache__/
+*.pyc
+.git/
+.streamlit/
+.env
+web/node_modules/
+web/.next/
+.DS_Store
